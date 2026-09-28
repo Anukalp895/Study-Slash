@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#09151d">
+  <meta name="description" content="A private, data-led view of your exam practice and progress.">
+  <title>Exam Arena · You vs. You</title>
+  <link rel="icon" type="image/svg+xml" href="../assets/exam-arena-symbol.svg">
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="#home" id="brandHome" aria-label="Exam Arena home">
+        <img class="brand-symbol" src="../assets/exam-arena-symbol.svg" alt="">
+        <span>EXAM <b>ARENA</b><small>YOUR PRACTICE, IN FOCUS</small></span>
+      </a>
+      <div class="topbar-tools">
+        <span class="privacy-note"><i></i> PRIVATE BY DESIGN</span>
+        <button id="launchDppBtn" class="tool-button" style="background:#0d9488; color:#fff; font-weight:700; border:none;" type="button">📄 DPP Arena</button>
+        <button id="openMonthlyReportsBtn" class="tool-button" type="button">📜 Monthly Report Cards</button>
+        <button id="exportAll" class="tool-button" type="button">Export</button>
+        <button id="importAll" class="tool-button" type="button">Import</button>
+        <input id="importFileInput" type="file" accept=".json,application/json" hidden>
+        <button id="clearAll" class="tool-button tool-danger" type="button">Clear logs</button>
+        <label class="theme-control" for="themeSelect"><span class="sr-only">Theme</span><select id="themeSelect" aria-label="Color theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+        <div class="total-xp-counter" aria-label="Total cultivation experience"><span>TOTAL CULTIVATION XP</span><strong id="dashboardTotalXp">0 XP</strong></div>
+      </div>
+    </header>
+
+    <main id="main" class="main-shell">
+      <section id="homeView" class="view home-view" aria-labelledby="homeTitle">
+        <div class="page-intro">
+          <div class="hero-copy"><p class="eyebrow">THE DAILY PRACTICE BRIEF</p><h1 id="homeTitle">You <span>vs.</span> You</h1><p class="intro-note">Small, repeatable gains. Your only benchmark is your last session.</p></div>
+          <aside class="hero-cultivation-card" id="heroCultivationCard" role="button" tabindex="0" aria-label="Open Hall of Cultivation">
+            <div class="hero-badge" id="heroCultivationBadge"></div>
+            <div class="hero-cultivation-copy"><p class="eyebrow" id="heroCultivationEyebrow">CURRENT REALM · TIER I</p><strong id="heroCultivationTitle">Elementary Profound Realm</strong><span id="heroCultivationLevel">Level 1 / 199 · Tier I</span><div class="hero-xp-row"><span id="heroCultivationXp">0 / 136 XP</span><span id="heroCultivationWound" class="hero-flow">🟢 Unhindered</span></div><div class="hero-xp-track"><span id="heroCultivationFill"></span></div><span class="hero-enter-cue">Enter Hall of Cultivation <b aria-hidden="true">↗</b></span></div>
+          </aside>
+        </div>
+
+        <section class="progress-panel" aria-labelledby="progressTitle">
+          <div class="progress-copy"><div><p class="eyebrow">VOLUME BUILDS MOMENTUM</p><h2 id="progressTitle">Overall progress</h2><p class="kpi-label"><strong id="volumeCount">0</strong> cultivated questions this month <span class="separator">/</span> <label class="target-edit">monthly target <input id="targetInput" type="number" min="1" max="100000" step="10" inputmode="numeric" aria-label="Monthly question target"></label></p></div>
+            <div class="progress-metric-right"><span class="progress-percent-val"><strong id="monthlyPercentNumber">0</strong><span class="clean-percent-glyph">%</span></span><span class="progress-percent-sub">of monthly target</span><strong id="volumePercent" class="sr-only">0%</strong></div>
+          </div>
+          <div class="progress-track" role="progressbar" aria-label="Monthly question target progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="monthlyProgressFill"></span></div>
+          <div class="progress-foot"><span id="monthlyProgressCaption">Every cultivated question moves the line.</span><span id="monthlyTargetRemaining">0 to go</span></div>
+        </section>
+
+        <section class="growth-grid" aria-label="Today's growth metrics">
+          <article class="score-panel">
+            <div class="today-score-card">
+              <div class="score-card-top"><span class="score-card-eyebrow">TODAY’S ACCURACY &amp; MOMENTUM</span><span class="score-date-pill" id="todayLabel"></span></div>
+              <div class="score-hero-row"><div class="score-hero-metric"><span id="todayScoreValue" class="score-hero-number">—</span><span class="score-hero-percent">%</span></div><div class="score-momentum-block"><span class="score-delta-badge" id="scoreDelta">—</span><strong id="todayScore" class="sr-only">—</strong><p class="score-sub-summary" id="scoreContext">Score uses encountered questions and +4 / −1 marking.</p></div></div>
+              <div class="score-track-container"><div class="score-track-bar"><div id="todayScoreProgressBar" class="score-track-fill" style="width:0%"></div></div><div class="score-track-labels"><span>0% Baseline</span><span>Target: 75% Combat Ready</span><span>100%</span></div></div>
+              <div class="score-quick-stats"><div class="score-stat-chip"><span class="chip-label">YESTERDAY</span><strong id="yesterdayScore" class="chip-val">—</strong></div><div class="score-stat-chip highlight"><span class="chip-label">NET MARKS</span><strong id="todayNet" class="chip-val text-teal">0</strong></div><div class="score-stat-chip"><span class="chip-label">ENCOUNTERED</span><strong id="todayCount" class="chip-val">0 questions</strong></div></div>
+            </div>
+          </article>
+          <article class="streak-panel">
+            <div class="streak-orbit" aria-hidden="true"><svg viewBox="0 0 72 72"><path d="M38 8c3 13-8 15-4 26 2-5 7-8 11-11 10 14 15 22 9 34-4 8-12 12-21 11-13-1-22-11-21-24 1-9 7-17 16-26-1 10 0 14 3 17C36 27 39 20 38 8Z"/><path class="flame-core" d="M38 38c2 7-4 9-2 15 1-3 3-4 5-6 5 7 6 11 3 16-2 4-6 6-10 5-7-1-11-6-10-12 0-5 4-9 8-13 0 5 0 7 2 9 2-4 3-8 4-14Z"/></svg></div>
+            <div class="streak-copy"><span class="eyebrow">DAILY STREAK</span><div class="streak-number"><strong id="streakCount">0</strong><span>days</span></div><p id="streakCaption">Log a session to start your run.</p></div>
+            <span class="streak-corner">CONSISTENCY<br>OVER INTENSITY</span>
+          </article>
+        </section>
+
+        <section class="analytics-grid" aria-label="Weekly analytics">
+          <article class="chart-panel">
+            <div class="section-head"><div><p class="eyebrow">THE WEEK IN REVIEW</p><h2>Stamina trend</h2><p>Average +4 / −1 score for each day with a session.</p></div><span class="chart-key"><i></i> SCORE %</span></div>
+            <div id="weeklyChart" class="chart-host" role="img" aria-label="Weekly exam score trend chart"></div>
+          </article>
+          <article class="bleed-panel">
+            <div class="bleed-symbol" aria-hidden="true"><svg viewBox="0 0 36 36"><path d="M18 4v18m0 0 7-7m-7 7-7-7M7 25v6h22v-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+            <p class="eyebrow">LAST 7 DAYS</p><h2>Negative bleed</h2>
+            <strong id="negativeMarks" class="bleed-value">−0</strong><p>marks lost to incorrect answers</p>
+            <div class="bleed-foot"><span id="wrongCount7d">0 wrong answers</span><span class="bleed-dot"></span><span>−1 each</span></div>
+          </article>
+        </section>
+
+        <section class="mastery-cultivation-grid" aria-label="Subject mastery and cultivation progress">
+        <section class="subject-mastery-panel" aria-labelledby="subjectMasteryTitle">
+          <header class="subject-mastery-header">
+            <div><p class="eyebrow">ACCURACY BY SUBJECT</p><h2 id="subjectMasteryTitle">Subject Mastery</h2></div>
+            <div id="subjectMasteryBadges" class="subject-mastery-badges" aria-live="polite"></div>
+          </header>
+          <div id="subjectMasteryRows" class="subject-mastery-rows" aria-live="polite"></div>
+        </section>
+
+        <section class="progress-panel cultivation-panel" aria-labelledby="cultivationTitle">
+          <div class="cultivation-heading"><p class="eyebrow">CURRENT CULTIVATION BASE</p><span class="cultivation-level" id="cultivationLevelLabel">LEVEL 34 / 199</span></div>
+          <div class="cultivation-identity">
+            <div class="cultivation-badge mortal" id="cultivationBadge" aria-hidden="true"><span>34</span></div>
+            <div class="cultivation-title-wrap"><h2 id="cultivationTitle">Spirit Profound Realm - Level 34</h2><p><strong id="cultivationVolume">0</strong> cumulative questions</p></div>
+            <div class="progress-percent"><strong id="cultivationPercent">85%</strong><span>this level</span></div>
+          </div>
+          <div class="cultivation-xp-copy"><span>EXPERIENCE</span><strong id="cultivationXp">0 / 136 XP</strong></div>
+          <div class="progress-track cultivation-track" id="cultivationTrack" role="progressbar" aria-label="Cultivation experience progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="85"><span id="cultivationProgressFill"></span></div>
+          <div class="cultivation-path" aria-label="Path to breakthrough conditions">
+            <span id="cultivationVolumeCondition">🎯 Next: +150 XP</span>
+            <span id="cultivationSkillCondition">📊 Condition: &gt;35% Accuracy &amp; Positive Net Score</span>
+            <span id="cultivationWound" class="cultivation-flow">🟢 Flow: Unhindered</span>
+          </div>
+          <button id="openCultivationGallery" class="gallery-trigger" type="button">View Cultivation Gallery <span aria-hidden="true">↗</span></button>
+        </section>
+        </section>
+
+        <section class="archive-section" aria-labelledby="archiveTitle">
+          <details id="archiveDrawer" class="archive-drawer" open>
+            <summary><div class="archive-title"><span class="archive-icon" aria-hidden="true">↗</span><div><p class="eyebrow">THE LONG GAME</p><h2 id="archiveTitle">Exam history archive</h2></div></div><div class="archive-summary"><span id="archiveCount">0 sessions</span><span class="drawer-chevron" aria-hidden="true">⌄</span></div></summary>
+            <div id="historyList" class="history-list"></div>
+          </details>
+        </section>
+
+        <section class="archive-section dpp-archive-section" aria-labelledby="dppArchiveTitle">
+          <details id="dppArchiveDrawer" class="archive-drawer" open>
+            <summary><div class="archive-title"><span class="archive-icon dpp-archive-icon" aria-hidden="true">📄</span><div><p class="eyebrow">OFFLINE TEST SERIES &amp; DPPS</p><h2 id="dppArchiveTitle">DPP History Archive</h2></div></div><div class="archive-summary"><span id="dppArchiveCount">0 sessions</span><span class="drawer-chevron" aria-hidden="true">⌄</span></div></summary>
+            <div id="dppHistoryList" class="history-list"></div>
+          </details>
+        </section>
+      </section>
+
+      <section id="autopsyView" class="view autopsy-view" hidden aria-labelledby="autopsyTitle">
+        <button id="backHome" class="back-link" type="button"><span aria-hidden="true">←</span> Dashboard</button>
+        <div class="autopsy-heading">
+          <div><p class="eyebrow">SESSION AUTOPSY</p><h1 id="autopsyTitle">Practice session</h1><p id="autopsyDate" class="intro-note"></p></div>
+          <div class="autopsy-header-actions">
+            <button id="autopsyDppReattemptBtn" class="ea-btn-pill-teal" type="button" style="display:none;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+                <path d="M3 3v5h5"/>
+              </svg>
+              <span>Reattempt Entire DPP</span>
+            </button>
+            <span id="sessionTimerType" class="session-type-badge mode-tag">STOPWATCH</span>
+          </div>
+        </div>
+        <section class="session-score-strip" aria-label="Session summary">
+          <div><span>SESSION TIME</span><strong id="sessionDuration">00:00</strong></div><div><span>NET SCORE</span><strong id="sessionNet">+0</strong></div><div><span>BLEED COUNT</span><strong id="sessionBleed">0</strong></div><div><span>RAW ACCURACY</span><strong id="sessionAccuracy">0%</strong></div><div><span>QUESTIONS</span><strong id="sessionQuestions">0</strong></div>
+        </section>
+        <section class="recovery-grid" aria-label="Time and recovery insights">
+          <article class="insight-panel time-sink-panel"><div class="insight-head"><span class="insight-icon red-icon" aria-hidden="true">↘</span><div><p class="eyebrow">COSTLY MOMENTS</p><h2>Time sinks</h2></div></div><p class="insight-note">Wrong attempts (&gt;1.2× avg and &gt;60s) or Costly Solves (&gt;2.0× avg and &gt;120s).</p><div id="timeSinkList" class="insight-list"></div></article>
+          <article class="insight-panel recovery-panel"><div class="insight-head"><span class="insight-icon green-icon" aria-hidden="true">↗</span><div><p class="eyebrow">SMART RECOVERY</p><h2>Calculated skips</h2></div></div><p class="insight-note">Unattempted questions between 8s and 45s. Time saved for what came next.</p><div class="recovery-total"><strong id="savedTime">00:00</strong><span>estimated time saved</span></div><div id="skipList" class="insight-list"></div></article>
+        </section>
+        <section class="pacing-panel"><div class="pacing-header-row"><div class="pacing-title-wrap"><p class="eyebrow">QUESTION DWELL &amp; PACING</p><h2 id="pacingGraphTitle">Session pacing</h2><p id="pacingGraphSubtitle">Dwell time per question against 120s standard pace target.</p></div><div class="ea-segmented-toggle"><button id="toggleSessionPacingBtn" class="seg-btn active" type="button">⏱ Session Pacing</button><button id="toggleConceptPacingBtn" class="seg-btn" type="button">💡 Concept Pacing</button></div><div id="pacingLegend" class="pacing-legend" style="display:inline-flex; align-items:center; gap:12px; flex-wrap:wrap;"><span class="chart-key key-right"><i style="background:#10b981;"></i> RIGHT</span><span class="chart-key key-wrong"><i style="background:#ef4444;"></i> WRONG</span><span class="chart-key key-skipped"><i style="background:#94a3b8;"></i> SKIPPED</span><span class="chart-key key-target"><i style="background:#f59e0b; width:12px; height:2px; border-radius:0;"></i> 120s TARGET</span><span id="reattemptLegendKey" class="chart-key key-reattempt" hidden><i style="background:#a855f7;"></i> REATTEMPT</span></div></div><div id="pacingChart" class="chart-host pacing-chart" role="img" aria-label="Session question dwell time chart"></div></section>
+        <section class="question-section"><div class="question-head"><div><p class="eyebrow">EVERY DECISION, RECORDED</p><h2>Question breakdown</h2></div><span id="questionCountDetail" class="detail-count">0 questions</span></div><div class="table-view-switcher"><button id="viewExamDecisionsBtn" class="table-tab-btn active" type="button">Exam Decisions</button><button id="viewConceptBreakdownBtn" class="table-tab-btn" type="button">Concept Breakdown</button></div><div class="table-scroll"><table><thead id="questionTableHead"><tr><th>Question</th><th>Time spent</th><th>Status</th><th>Marks</th><th>Actions</th></tr></thead><tbody id="questionRows"></tbody></table></div></section>
+      </section>
+
+      <section id="cultivationHallView" class="view cultivation-hall-view" hidden aria-labelledby="galleryTitle">
+        <nav class="hall-topnav" aria-label="Hall navigation">
+          <button id="backToDashboardBtn" class="back-link" type="button">← Return to Dashboard</button>
+          <p class="hall-breadcrumb"><span>EXAM ARENA</span><i>/</i><strong>SACRED ARCHIVE OF ASCENSION</strong></p>
+          <div class="hall-nav-tools">
+            <label class="theme-control" for="hallThemeSelect"><span class="sr-only">Theme</span><select id="hallThemeSelect" aria-label="Color theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+            <span id="hallUserSummary" class="hall-user-summary">LEVEL 1 · ELEMENTARY</span>
+            <div class="total-xp-counter hall-total-xp" aria-label="Total cultivation experience"><span>TOTAL CULTIVATION XP</span><strong id="hallTotalXp">0 XP</strong></div>
+          </div>
+        </nav>
+        <header class="hall-page-heading">
+          <div><p class="eyebrow">SACRED ARCHIVE OF ASCENSION</p><h1 id="galleryTitle">Hall of Cultivation</h1><p id="gallerySummary" class="gallery-summary">Ascension Level 1 of 199</p></div>
+          <button id="jumpCurrentRealm" class="jump-current" type="button">Jump to Current Realm</button>
+        </header>
+        <section class="hall-showcase" aria-label="Cultivation realm showcase">
+          <button id="realmPrevBtn" class="realm-nav" type="button" aria-label="Previous realm">‹</button>
+          <div id="realmShowcaseStage" class="realm-showcase-stage" aria-live="polite"></div>
+          <button id="realmNextBtn" class="realm-nav" type="button" aria-label="Next realm">›</button>
+        </section>
+      </section>
+    </main>
+    <footer><span class="footer-brand">EA / EXAM ARENA</span><span>Practice records stay on this device.</span><span id="sessionSource">LOCAL SESSION DATA</span></footer>
+  </div>
+
+  <div id="clearConfirm" class="dialog-scrim" role="presentation" hidden><section class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="clearTitle"><span class="eyebrow">BACKUP BEFORE DELETE</span><h2 id="clearTitle">Clear your exam archive?</h2><p>A JSON backup will be downloaded before the locally stored history is cleared.</p><div class="confirm-actions"><button id="clearCancel" class="tool-button" type="button">Keep my history</button><button id="confirmClear" class="tool-button tool-danger solid-danger" type="button">Export backup & clear</button></div></section></div>
+
+  <!-- Monthly Reports Archive Modal -->
+  <div id="monthlyReportsArchiveModal" class="ea-modal-backdrop" hidden>
+    <div class="ea-archive-modal-content">
+      <div class="ea-archive-modal-header">
+        <div>
+          <span class="eyebrow">HISTORICAL MILESTONES</span>
+          <h2>📜 Monthly Cultivation Report Cards</h2>
+          <p class="ea-archive-subtitle">Review past monthly practice milestones, combat metrics, and multi-slide 9:16 Flex Status Cards.</p>
+        </div>
+        <button id="closeArchiveModalBtn" class="ea-btn-subtle" type="button">✕ Close</button>
+      </div>
+
+      <div class="ea-archive-actions-bar">
+        <button id="viewCurrentMonthLiveBtn" class="ea-btn-primary" type="button">✨ View Current Month (Live Flex Cards)</button>
+      </div>
+
+      <div id="monthlyReportsArchiveList" class="ea-archive-grid">
+        <!-- Rendered dynamically by renderMonthlyReportsArchive -->
+      </div>
+      <div id="monthlyReportsArchiveEmpty" class="ea-archive-empty" hidden>
+        <div class="ea-archive-empty-glyph">📜</div>
+        <h3>No Concluded Monthly Reports Yet</h3>
+        <p>When the current calendar month concludes, an official Report Card will automatically be archived here on the 1st of next month. Click the button above to view and share your live progress cards anytime!</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 9:16 Multi-Card Flex Status Card Modal -->
+  <div id="monthlyReportModal" class="ea-modal-backdrop" hidden>
+    <div class="ea-report-container">
+      <div class="ea-report-actions-top">
+        <button id="closeReportModalBtn" class="ea-btn-subtle" type="button">✕ Close</button>
+        <div class="story-tabs-bar" role="tablist" id="storyTabsBar">
+          <button class="story-tab active" data-card="realm" type="button">👑 1. Realm &amp; Qi</button>
+          <button class="story-tab" data-card="combat" type="button">⚔️ 2. Combat</button>
+          <button class="story-tab" data-card="focus" type="button">⏳ 3. Deep Focus</button>
+          <button class="story-tab" data-card="summary" type="button">📊 4. Overview</button>
+        </div>
+        <div class="story-export-btns">
+          <button id="downloadStatusImageBtn" class="ea-btn-primary" type="button">📸 Download Card (PNG)</button>
+          <button id="downloadAllCardsBtn" class="ea-btn-subtle" type="button" title="Download all 4 cards for stories">📦 Download All 4</button>
+        </div>
+      </div>
+
+      <!-- Story Stage with Navigation -->
+      <div class="story-stage">
+        <button id="prevStoryCardBtn" class="story-nav-btn story-prev" type="button" aria-label="Previous card">‹</button>
+        
+        <!-- 9:16 Card Container -->
+        <div id="flexStatusCard" class="flex-story-card">
+          <div class="story-header">
+            <div class="story-brand">
+              <span class="brand-glyph">⚔️</span>
+              <span class="brand-text">EXAM ARENA</span>
+            </div>
+            <div class="story-month-tag" id="cardMonthTag">SEPTEMBER 2026</div>
+          </div>
+
+          <div id="cardDynamicContent" class="story-dynamic-content">
+            <!-- Populated dynamically by renderStoryCardView -->
+          </div>
+
+          <div class="story-footer">
+            <div class="story-tagline" id="cardFooterTagline">Tracked with Focus · Zero Distractions</div>
+            <div class="story-watermark">examarena.app</div>
+          </div>
+        </div>
+
+        <button id="nextStoryCardBtn" class="story-nav-btn story-next" type="button" aria-label="Next card">›</button>
+      </div>
+
+      <div class="story-carousel-footer">
+        <div class="story-indicators" id="storyIndicators">
+          <span class="dot active" data-index="0"></span>
+          <span class="dot" data-index="1"></span>
+          <span class="dot" data-index="2"></span>
+          <span class="dot" data-index="3"></span>
+        </div>
+        <span class="story-counter" id="storyCardCounter">Card 1 of 4: Realm Ascension &amp; Qi Harvest</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="cultivation-visuals.js"></script>
+  <script src="dpp_db.js"></script>
+  <script src="dashboard.js"></script>
+</body>
+</html>

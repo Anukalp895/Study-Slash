@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Exam Arena</title>
+  <link rel="icon" type="image/svg+xml" href="../assets/exam-arena-symbol.svg">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main class="panel">
+    <header class="topbar">
+      <img class="mark" src="../assets/exam-arena-symbol.svg" alt="">
+      <div><p class="eyebrow">STUDY SESSION</p><h1>Exam Arena</h1></div>
+      <span id="statePill" class="pill">OFF</span>
+    </header>
+
+    <section class="timer-card" aria-live="polite">
+      <span class="label" id="timerLabel">Ready when you are</span>
+      <strong id="timer">00:00:00</strong>
+      <div class="timer-foot"><span class="live-dot"></span><span id="questionCount">0 questions tracked</span></div>
+    </section>
+
+    <section class="cultivation-mini" aria-label="Cultivation progress">
+      <div id="popupCultivationBadge" class="mini-badge"></div>
+      <div class="mini-cultivation-copy"><p class="eyebrow">CULTIVATION BASE <span id="popupCultivationLevelTag">LEVEL 1 / 199</span></p><strong id="popupCultivationTitle">Elementary Profound Realm</strong><span id="popupCultivationWound" class="mini-flow">🟢 Flow: Unhindered</span></div>
+    </section>
+
+    <div class="focus-shield-card">
+      <div class="focus-shield-info">
+        <span class="focus-shield-icon">🛡️</span>
+        <div>
+          <strong>Focus Shield</strong>
+          <p>Block distractions &amp; YouTube Guard</p>
+        </div>
+      </div>
+      <label class="switch" aria-label="Toggle Focus Shield">
+        <input type="checkbox" id="focusModeToggle">
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <button id="toggleButton" class="primary">Start Session</button>
+    <button id="dashboardButton" class="secondary dashboard-button" type="button">Open Exam Arena Dashboard <span aria-hidden="true">↗</span></button>
+    <button id="dppArenaButton" class="secondary" type="button" style="margin-top:6px; background:#0d9488; color:#fff; border:none; font-weight:700;">Launch DPP Arena (PDF Mode) ↗</button>
+
+    <section id="reportSection" class="report" hidden>
+      <div class="section-title"><div><h2>Session summary</h2><p id="reportIdentity"></p></div><span id="endedLabel"></span></div>
+      <div class="stats">
+        <div><span>Total time</span><strong id="totalTime">—</strong></div>
+        <div><span>Avg. / question</span><strong id="averageTime">—</strong></div>
+      </div>
+      <div class="table-wrap"><table><thead><tr><th>Question</th><th>Time</th><th>Status</th></tr></thead><tbody id="questionRows"></tbody></table></div>
+      <div class="actions"><button id="exportButton" class="secondary">Export JSON</button><button id="clearButton" class="text-button">Clear history</button></div>
+    </section>
+
+    <footer><span class="shield">◆</span> Feedback stays hidden until your session ends.</footer>
+  </main>
+  <div id="setupModal" class="setup-backdrop" hidden>
+    <section class="setup-dialog" role="dialog" aria-modal="true" aria-labelledby="setupTitle">
+      <header class="setup-header"><div><p class="eyebrow">SESSION SETUP</p><h2 id="setupTitle">Name this session</h2></div><button id="setupCancelTop" class="setup-close" type="button" aria-label="Cancel setup">×</button></header>
+      <div class="setup-progress" aria-label="Setup progress"><span class="step-dot current" data-progress-step="1">1</span><i></i><span class="step-dot" data-progress-step="2">2</span><i></i><span class="step-dot" data-progress-step="3">3</span></div>
+
+      <section class="setup-step" data-step="1">
+        <p class="setup-help">Give this practice run a name you’ll recognize in your history.</p>
+        <label class="setup-label" for="examNameInput">Exam name</label>
+        <input id="examNameInput" class="setup-input" type="text" maxlength="90" autocomplete="off" placeholder="e.g., JEE Main Shift 1 Test Series, Practice Set A" list="recentNamesList">
+        <datalist id="recentNamesList"></datalist>
+        <p id="nameError" class="setup-error" hidden>Enter an exam name to continue.</p>
+        <div class="setup-actions"><button class="setup-secondary setup-cancel" type="button">Cancel</button><button id="nameNext" class="setup-primary" type="button">Next <span aria-hidden="true">→</span></button></div>
+      </section>
+
+      <section class="setup-step" data-step="2" hidden>
+        <p class="setup-help">Choose a subject or add one to your personal registry.</p>
+        <div id="subjectChoices" class="subject-choices" aria-label="Registered subjects"></div>
+        <label class="setup-label" for="subjectInput">Add subject</label>
+        <div class="inline-add"><input id="subjectInput" class="setup-input" type="text" maxlength="50" placeholder="+ Add Subject" autocomplete="off"><button id="addSubjectButton" class="add-subject" type="button">Add</button></div>
+        <p id="subjectError" class="setup-error" hidden>Choose or add a subject to continue.</p>
+        <div class="setup-actions"><div class="setup-nav-secondary"><button class="setup-secondary" data-back="1" type="button">Back</button><button class="setup-secondary setup-cancel" type="button">Cancel</button></div><button id="subjectNext" class="setup-primary" type="button" disabled>Next <span aria-hidden="true">→</span></button></div>
+      </section>
+
+      <section class="setup-step" data-step="3" hidden>
+        <p class="setup-help">Choose how you want to pace this session.</p>
+        <div class="mode-choices">
+          <button class="mode-choice selected" data-mode="stopwatch" type="button" aria-pressed="true"><span class="mode-radio"></span><span><strong>Stopwatch</strong><small>Open-ended · counts up</small></span></button>
+          <button class="mode-choice" data-mode="countdown" type="button" aria-pressed="false"><span class="mode-radio"></span><span><strong>Countdown</strong><small>Set a time constraint</small></span></button>
+        </div>
+        <div id="countdownFields" class="countdown-fields" hidden>
+          <label class="setup-label" for="minutesInput">Allotted time <span>(minutes)</span><input id="minutesInput" class="setup-input" type="number" min="1" max="1440" inputmode="numeric" placeholder="60"></label>
+          <label class="setup-label" for="questionsInput">Question cap <span>(optional)</span><input id="questionsInput" class="setup-input" type="number" min="1" max="500" inputmode="numeric" placeholder="No limit"></label>
+        </div>
+        <p id="setupError" class="setup-error" role="alert" hidden></p>
+        <div class="setup-actions"><div class="setup-nav-secondary"><button class="setup-secondary" data-back="2" type="button">Back</button><button class="setup-secondary setup-cancel" type="button">Cancel</button></div><button id="launchButton" class="setup-primary launch-button" type="button">Launch Arena</button></div>
+      </section>
+    </section>
+  </div>
+  <script src="../dashboard/cultivation-visuals.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,80 @@
+{
+  "manifest_version": 3,
+  "name": "Exam Arena",
+  "version": "1.0.0",
+  "description": "A focused exam environment with private practice analytics and masked answer feedback.",
+  "icons": {
+    "16": "assets/exam-arena-icon-16.png",
+    "32": "assets/exam-arena-icon-32.png",
+    "48": "assets/exam-arena-icon-48.png",
+    "128": "assets/exam-arena-icon-128.png"
+  },
+  "permissions": [
+    "storage",
+    "tabs",
+    "webNavigation",
+    "activeTab",
+    "scripting",
+    "alarms",
+    "unlimitedStorage",
+    "declarativeNetRequest",
+    "declarativeNetRequestFeedback"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "focus_rules",
+        "enabled": false,
+        "path": "rules/focus_rules.json"
+      }
+    ]
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "dashboard/focus_blocked.html",
+        "dashboard/focus_blocked.css",
+        "dashboard/focus_blocked.js",
+        "dashboard/cultivation-visuals.js",
+        "dashboard/dashboard.html",
+        "dashboard/dpp_arena.html",
+        "assets/*",
+        "styles/*"
+      ],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "background": { "service_worker": "background.js" },
+  "options_page": "dashboard/dashboard.html",
+  "action": {
+    "default_title": "Exam Arena",
+    "default_icon": {
+      "16": "assets/exam-arena-icon-16.png",
+      "32": "assets/exam-arena-icon-32.png"
+    },
+    "default_popup": "popup/popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.youtube.com/*"],
+      "js": ["content_scripts/yt_focus_guard.js"],
+      "css": ["styles/yt_focus.css"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["*://*.getmarks.app/*"],
+      "js": ["content_scripts/marks_interceptor.js"],
+      "css": ["styles/blur.css"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "exclude_matches": ["*://*.youtube.com/*", "*://*.getmarks.app/*"],
+      "js": ["content_scripts/focus_guard.js"],
+      "run_at": "document_start"
+    }
+  ]
+}

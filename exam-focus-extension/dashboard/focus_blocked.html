@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Path Blocked — Exam Arena Focus</title>
+  <link rel="icon" type="image/svg+xml" href="../assets/exam-arena-symbol.svg">
+  <link rel="stylesheet" href="focus_blocked.css">
+</head>
+<body>
+  <div class="blocked-bg-glow"></div>
+  <main class="blocked-card" role="main">
+    <header class="blocked-header">
+      <img class="arena-mark" src="../assets/exam-arena-symbol.svg" alt="Exam Arena Symbol">
+      <span class="focus-shield-badge">🛡️ EXAM ARENA FOCUS</span>
+    </header>
+
+    <div class="cultivation-display">
+      <div id="blockedCultivationBadge" class="emblem-container" aria-label="Cultivation emblem"></div>
+      <div class="cultivation-info">
+        <span id="blockedCultivationLevel" class="level-tag">LEVEL 1 / 199</span>
+        <h2 id="blockedCultivationTitle" class="realm-title">Elementary Profound Realm</h2>
+        <span id="blockedCultivationFlow" class="flow-pill">🟢 Flow: Unhindered</span>
+      </div>
+    </div>
+
+    <div class="message-section">
+      <h1 class="headline">Path Blocked by Cultivation Focus</h1>
+      <p class="body-text">This site is restricted during your study session. Protect your streak and eliminate negative bleed.</p>
+      
+      <div id="blockedReasonPill" class="blocked-reason-pill">
+        <span class="shield-dot"></span>
+        <span id="blockedReasonText">Distraction Filter Active</span>
+      </div>
+
+      <div id="activeSessionBanner" class="active-session-banner" hidden>
+        <span class="pulse-dot"></span>
+        <span id="activeSessionLabel">Live Exam Session Ongoing</span>
+      </div>
+    </div>
+
+    <div class="action-buttons">
+      <button id="btnReturnDashboard" class="btn-primary" type="button">Return to Dashboard</button>
+      <button id="btnOpenDpp" class="btn-secondary" type="button">Open DPP Arena ↗</button>
+    </div>
+
+    <footer class="blocked-footer">
+      <span>◆ Every interruption breaks deep flow. Master the inner flame.</span>
+    </footer>
+  </main>
+
+  <script src="cultivation-visuals.js"></script>
+  <script src="focus_blocked.js"></script>
+</body>
+</html>

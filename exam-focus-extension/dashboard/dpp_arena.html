@@ -1,0 +1,419 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#09151d">
+  <meta name="description" content="DPP Arena - In-browser PDF Exam Mode with Auto-Grading & CBT Console">
+  <title>DPP Arena · Exam Arena</title>
+  <link rel="icon" type="image/svg+xml" href="../assets/exam-arena-symbol.svg">
+  <link rel="stylesheet" href="dashboard.css">
+  <link rel="stylesheet" href="dpp_arena.css">
+</head>
+<body>
+  <div class="app-shell dpp-arena-shell">
+    <!-- Topbar -->
+    <header class="topbar dpp-topbar">
+      <div class="topbar-left">
+        <a class="brand" href="dashboard.html" aria-label="Exam Arena home">
+          <img class="brand-symbol" src="../assets/exam-arena-symbol.svg" alt="">
+          <span>EXAM <b>ARENA</b><small>DPP ARENA · OFFLINE CBT</small></span>
+        </a>
+        <div id="arenaSessionChip" class="session-chip" hidden>
+          <span class="session-source-badge">DPP</span>
+          <span id="arenaExamTitleBadge" class="session-title-text">DPP Exam</span>
+          <span id="arenaSubjectBadge" class="session-subject-tag">Physics</span>
+        </div>
+      </div>
+
+      <div class="topbar-center" id="examLiveMetrics" hidden>
+        <div class="live-metric-card">
+          <span class="metric-label">QUESTION TIME</span>
+          <strong id="liveQuestionTimer" class="metric-val">00:00</strong>
+        </div>
+        <div class="live-metric-card">
+          <span class="metric-label" id="liveTotalTimerLabel">TOTAL TIME</span>
+          <strong id="liveTotalTimer" class="metric-val live-clock">00:00</strong>
+        </div>
+      </div>
+
+      <div class="topbar-tools">
+        <button id="exitArenaBtn" class="tool-button" type="button">← Back to Dashboard</button>
+      </div>
+    </header>
+
+    <!-- Main Workspace -->
+    <main id="dppMain" class="dpp-main-content">
+      <!-- 1. Upload & Pre-Exam Setup View -->
+      <section id="setupView" class="dpp-view setup-view">
+        <div class="setup-container">
+          <div class="setup-hero">
+            <p class="eyebrow">OFFLINE TEST SERIES &amp; DPP ARENA</p>
+            <h1>In-Browser PDF Practice <span>with Auto-Grading</span></h1>
+            <p class="intro-note">
+              Drop any offline test or DPP PDF. The engine parses the embedded answer key, provides a high-fidelity CBT console, tracks dwell time per question, and computes private autopsy analytics.
+            </p>
+          </div>
+
+          <!-- Dropzone -->
+          <div id="dropZone" class="dpp-dropzone" tabindex="0" role="region" aria-label="PDF Upload Dropzone">
+            <input type="file" id="pdfFileInput" accept="application/pdf,.pdf" hidden>
+            <div class="dropzone-inner">
+              <div class="dropzone-icon">
+                <svg viewBox="0 0 48 48" width="48" height="48" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M28 8H12a4 4 0 0 0-4 4v24a4 4 0 0 0 4 4h24a4 4 0 0 0 4-4V20L28 8z" />
+                  <path d="M28 8v12h12" />
+                  <path d="M24 24v10m-5-5 5-5 5 5" />
+                </svg>
+              </div>
+              <h3>Drag &amp; drop your DPP or Test PDF here</h3>
+              <p>Supports Allen, Physics Wallah, Aakash, and standard LaTeX/CBT PDF formats</p>
+              <button id="browseFileBtn" class="btn-browse" type="button">Choose PDF File</button>
+              <div id="demoPdfNotice" class="demo-pdf-notice" hidden>
+                <span>Found test PDF: <b>Shm_1200366_1_1790344384.pdf</b></span>
+                <button id="loadTestPdfBtn" class="btn-demo" type="button">Load Test PDF (SHM DPP)</button>
+              </div>
+            </div>
+            <div id="parsingOverlay" class="parsing-overlay" hidden>
+              <div class="spinner"></div>
+              <p id="parsingStatusText">Scanning PDF pages and detecting Answer Key...</p>
+            </div>
+          </div>
+
+          <!-- Configuration Card (Shown once parsed) -->
+          <div id="configCard" class="config-card" hidden>
+            <div class="config-header">
+              <div>
+                <p class="eyebrow">READY FOR BATTLE</p>
+                <h2 id="configCardTitle">DPP Configuration</h2>
+              </div>
+              <span id="keyDetectionBadge" class="key-badge">25 Questions Key Detected</span>
+            </div>
+
+            <div class="config-grid">
+              <div class="config-field">
+                <label for="examTitleInput">Exam / DPP Title</label>
+                <input type="text" id="examTitleInput" placeholder="e.g. DPP - Simple Harmonic Motion">
+              </div>
+
+              <div class="config-field">
+                <label for="subjectSelect">Subject</label>
+                <select id="subjectSelect">
+                  <option value="Physics">Physics</option>
+                  <option value="Chemistry">Chemistry</option>
+                  <option value="Mathematics">Mathematics</option>
+                  <option value="Biology">Biology</option>
+                  <option value="General">General / Mock</option>
+                </select>
+              </div>
+
+              <div class="config-field">
+                <label for="modeSelect">Practice Mode</label>
+                <select id="modeSelect">
+                  <option value="stopwatch">Open Stopwatch (Untimed)</option>
+                  <option value="countdown">Countdown Timer (Strict CBT)</option>
+                </select>
+              </div>
+
+              <div class="config-field" id="countdownConfigGroup" hidden>
+                <label for="countdownMinutesInput">Allotted Time (Minutes)</label>
+                <input type="number" id="countdownMinutesInput" min="5" max="360" value="45" step="5">
+              </div>
+
+              <div class="config-field">
+                <label for="questionCountInput">Total Questions</label>
+                <input type="number" id="questionCountInput" min="1" max="200" value="25">
+              </div>
+
+              <div class="config-field">
+                <label>Answer Key Status</label>
+                <div class="key-status-row">
+                  <span id="keyStatusSummary" class="key-summary-text">25 / 25 verified</span>
+                  <button id="toggleKeyEditorBtn" class="btn-secondary-small" type="button">Inspect / Edit Key</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Answer Key Editor Drawer -->
+            <div id="keyEditorDrawer" class="key-editor-drawer" hidden>
+              <div class="drawer-header">
+                <h4>Answer Key Inspection &amp; Manual Override</h4>
+                <p>Verify or adjust the answers below. You can also paste raw key text.</p>
+              </div>
+              <div class="raw-key-input-row">
+                <input type="text" id="rawKeyInput" placeholder="Paste key text (e.g. 1-B 2-B 3-D 4-C ... or B B D C)">
+                <button id="applyRawKeyBtn" class="btn-secondary-small" type="button">Apply Key</button>
+              </div>
+              <div id="keyGrid" class="key-grid">
+                <!-- Dynamically populated Q-Ans chips -->
+              </div>
+            </div>
+
+            <div class="config-actions">
+              <button id="startArenaBtn" class="btn-launch-arena" type="button">
+                Launch DPP Arena ↗
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2. Arena Split-Screen Workspace (Active Exam & Solution Modes) -->
+      <section id="arenaWorkspace" class="dpp-view arena-workspace" hidden>
+        <!-- Solution Mode Top Notification Banner -->
+        <div id="solutionModeBanner" class="solution-mode-banner" hidden>
+          <div class="banner-left">
+            <span class="solution-pill">SOLUTION VIEW</span>
+            <span id="solutionQuestionInfo" class="solution-q-info">Question 1</span>
+            <span id="solutionScoreBadge" class="solution-score-badge">+4 Right</span>
+          </div>
+          <div class="banner-right">
+            <span id="solutionKeyCompare" class="solution-compare">Your Choice: <b>B</b> · Correct Key: <b>B</b></span>
+            <button id="solPrevBtn" class="btn-sol-nav" type="button">‹ Prev</button>
+            <button id="solNextBtn" class="btn-sol-nav" type="button">Next ›</button>
+            <button id="exitSolModeBtn" class="btn-sol-exit" type="button">Return to Autopsy ↗</button>
+          </div>
+        </div>
+
+        <div class="split-container" id="splitContainer">
+          <!-- Left Pane: PDF Viewer -->
+          <div class="pdf-pane" id="pdfPane">
+            <!-- PDF Toolbar -->
+            <div class="pdf-toolbar">
+              <div class="toolbar-group">
+                <button id="pdfZoomOutBtn" class="toolbar-btn" title="Zoom Out (-)">−</button>
+                <span id="pdfZoomLabel" class="toolbar-label">100%</span>
+                <button id="pdfZoomInBtn" class="toolbar-btn" title="Zoom In (+)">+</button>
+                <button id="pdfFitWidthBtn" class="toolbar-btn" title="Fit to Width">Fit Width</button>
+              </div>
+
+              <div class="toolbar-group">
+                <button id="pdfPrevPageBtn" class="toolbar-btn" title="Previous Page">‹</button>
+                <span class="page-indicator">
+                  Page <input type="number" id="pdfPageInput" min="1" value="1" aria-label="Page number"> / <span id="pdfTotalPages">1</span>
+                </span>
+                <button id="pdfNextPageBtn" class="toolbar-btn" title="Next Page">›</button>
+              </div>
+
+              <div class="toolbar-group">
+                <button id="jumpQuestionsBtn" class="toolbar-btn toolbar-accent" type="button">Questions</button>
+                <button id="jumpSolutionsBtn" class="toolbar-btn toolbar-accent" type="button" hidden>Solutions</button>
+              </div>
+            </div>
+
+            <!-- PDF Scrollable Canvas Container -->
+            <div class="pdf-viewport" id="pdfViewport">
+              <div id="pdfPagesHost" class="pdf-pages-host">
+                <!-- Canvases rendered sequentially -->
+              </div>
+            </div>
+          </div>
+
+          <!-- Split Resizer Bar -->
+          <div class="split-resizer" id="splitResizer" title="Drag to resize panels">
+            <div class="resizer-handle"></div>
+          </div>
+
+          <!-- Right Pane: CBT Question Console -->
+          <div class="console-pane" id="consolePane">
+            <div class="console-content">
+              <!-- Active Question Top Bar -->
+              <div class="q-header">
+                <div>
+                  <span class="q-eyebrow" id="activeQuestionEyebrow">ACTIVE QUESTION</span>
+                  <h2 id="activeQuestionTitle" class="q-title">Question 1</h2>
+                </div>
+                <div class="q-meta-badges">
+                  <span id="qDwellBadge" class="q-dwell-badge">⏱ 00:00</span>
+                  <span id="qStatusBadge" class="q-status-badge status-unattempted">Unattempted</span>
+                </div>
+              </div>
+
+              <!-- Options Selection Grid -->
+              <div class="options-container">
+                <p class="options-hint">Select option or press keys <b>1–4</b> / <b>A–D</b>. Press again to deselect.</p>
+                <div class="options-grid" id="optionsGrid">
+                  <button class="option-btn" data-option="A" type="button">
+                    <span class="opt-letter">A</span>
+                    <span class="opt-label">Option A</span>
+                    <span class="opt-shortcut">1</span>
+                  </button>
+                  <button class="option-btn" data-option="B" type="button">
+                    <span class="opt-letter">B</span>
+                    <span class="opt-label">Option B</span>
+                    <span class="opt-shortcut">2</span>
+                  </button>
+                  <button class="option-btn" data-option="C" type="button">
+                    <span class="opt-letter">C</span>
+                    <span class="opt-label">Option C</span>
+                    <span class="opt-shortcut">3</span>
+                  </button>
+                  <button class="option-btn" data-option="D" type="button">
+                    <span class="opt-letter">D</span>
+                    <span class="opt-label">Option D</span>
+                    <span class="opt-shortcut">4</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Question Action Controls -->
+              <div class="q-actions-bar">
+                <button id="clearAnswerBtn" class="btn-console-tool" type="button">Clear Response</button>
+                <button id="toggleReviewBtn" class="btn-console-tool btn-review" type="button">
+                  <span class="bookmark-icon">★</span> Mark for Review
+                </button>
+              </div>
+
+              <!-- Question Navigation -->
+              <div class="q-nav-row">
+                <button id="prevQuestionBtn" class="btn-nav" type="button">← Previous (P)</button>
+                <button id="nextQuestionBtn" class="btn-nav btn-nav-primary" type="button">Next → (N)</button>
+              </div>
+
+              <!-- Question Palette Section -->
+              <div class="palette-section" id="paletteSection">
+                <div class="palette-header">
+                  <h3>Question Palette</h3>
+                  <span id="paletteCountSummary" class="palette-summary">0 / 25 Answered</span>
+                </div>
+
+                <!-- Palette Legend -->
+                <div class="palette-legend">
+                  <div class="legend-item"><span class="legend-swatch answered"></span> Answered</div>
+                  <div class="legend-item"><span class="legend-swatch visited"></span> Unattempted</div>
+                  <div class="legend-item"><span class="legend-swatch review"></span> Marked</div>
+                  <div class="legend-item"><span class="legend-swatch review-answered"></span> Marked &amp; Ans</div>
+                  <div class="legend-item"><span class="legend-swatch unvisited"></span> Not Visited</div>
+                </div>
+
+                <!-- Palette Grid -->
+                <div id="paletteGrid" class="palette-grid">
+                  <!-- Dynamically rendered 1..N items -->
+                </div>
+              </div>
+
+              <!-- Submit Section -->
+              <div class="submit-section" id="examSubmitSection">
+                <button id="submitExamBtn" class="btn-submit-exam" type="button">
+                  Submit DPP Exam ↗
+                </button>
+              </div>
+
+              <!-- Dedicated Reattempt Actions Container -->
+              <div id="reattemptActions" class="reattempt-actions-box" hidden>
+                <div class="reattempt-status-note">
+                  <span class="status-indicator-dot"></span>
+                  <span>Standalone Reattempt Mode</span>
+                </div>
+                <p class="reattempt-help-text" id="reattemptHelpText">
+                  Answer correctly to heal cultivation wound (+4 marks).
+                </p>
+                <button id="submitReattemptBtn" class="btn-submit-exam btn-reattempt-submit" type="button">
+                  Submit Reattempt ↗
+                </button>
+                <button id="cancelReattemptBtn" class="btn-console-tool" type="button" style="margin-top:8px; width:100%;">
+                  Cancel &amp; Return to Autopsy
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Submission Confirmation Modal -->
+  <div id="submitModal" class="dialog-scrim" role="presentation" hidden>
+    <section class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="submitModalTitle">
+      <span class="eyebrow">FINAL SUBMISSION</span>
+      <h2 id="submitModalTitle">Submit DPP Exam?</h2>
+      <p>Here is your practice summary. Outcomes will be auto-graded against the answer key immediately.</p>
+      
+      <div class="modal-summary-grid">
+        <div class="summary-box">
+          <span>TOTAL</span>
+          <strong id="modalTotalQ">25</strong>
+        </div>
+        <div class="summary-box summary-green">
+          <span>ANSWERED</span>
+          <strong id="modalAnsweredQ">0</strong>
+        </div>
+        <div class="summary-box summary-red">
+          <span>UNATTEMPTED</span>
+          <strong id="modalUnattemptedQ">25</strong>
+        </div>
+        <div class="summary-box summary-purple">
+          <span>MARKED REVIEW</span>
+          <strong id="modalReviewQ">0</strong>
+        </div>
+      </div>
+
+      <div class="confirm-actions">
+        <button id="modalCancelBtn" class="tool-button" type="button">Return to Exam</button>
+        <button id="modalConfirmBtn" class="tool-button tool-primary solid-primary" type="button">Yes, Submit &amp; Grade</button>
+      </div>
+    </section>
+  </div>
+
+  <!-- Exit Confirmation Modal -->
+  <div id="exitModal" class="dialog-scrim" role="presentation" hidden>
+    <section class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="exitModalTitle">
+      <span class="eyebrow">UNSAVED PRACTICE</span>
+      <h2 id="exitModalTitle">Leave DPP Arena?</h2>
+      <p>An exam is currently in progress. Exiting will cancel the current session without saving.</p>
+      <div class="confirm-actions">
+        <button id="exitCancelBtn" class="tool-button" type="button">Keep Practicing</button>
+        <button id="exitConfirmBtn" class="tool-button tool-danger solid-danger" type="button">Exit to Dashboard</button>
+      </div>
+    </section>
+  </div>
+
+  <!-- Persistent Draggable Floating Action Button (FAB) for Solution Mode -->
+  <div id="ea-solution-fab" class="ea-solution-fab" hidden title="Solution Quick-Nav (Drag to move)">
+    <span class="fab-icon">⚡</span>
+    <span class="fab-label">Solutions</span>
+  </div>
+
+  <aside id="ea-concept-timer-hud" class="concept-timer-hud" hidden aria-label="Concept review timer">
+    <div class="hud-drag-handle"><span class="hud-pill-tag">💡 CONCEPT UNDERSTANDING</span><span id="hudActiveQuestionLabel" class="hud-q-label">Q1 Review</span></div>
+    <div class="hud-timer-display"><span class="timer-icon">⏱</span><span id="conceptLiveTimer" class="timer-clock">00:00</span></div>
+    <div class="hud-actions-row"><button id="conceptSkipNextBtn" class="hud-btn-secondary" type="button">Skip &amp; Next →</button><button id="conceptCompleteNextBtn" class="hud-btn-primary" type="button">✓ Complete &amp; Next →</button></div>
+    <button id="conceptCloseHudBtn" class="hud-btn-ghost" type="button">Pause &amp; Close</button>
+  </aside>
+
+  <!-- Solution Quick-Nav Palette Modal -->
+  <div id="ea-solution-fab-panel" class="ea-solution-fab-panel" hidden>
+    <div class="fab-panel-header">
+      <div class="fab-panel-title">
+        <span class="fab-panel-badge">SOLUTION QUICK-NAV</span>
+        <h3 id="fabCurrentQText">Question 1 Solution</h3>
+      </div>
+      <button id="fabCloseBtn" class="fab-close-btn" type="button" aria-label="Close palette">×</button>
+    </div>
+    
+    <div id="fabQuestionStatusStrip" class="fab-status-strip">
+      <span id="fabOutcomeBadge" class="solution-score-badge">+4 Right</span>
+      <span id="fabChoicesText" class="fab-choices-text">Your: B · Key: B</span>
+    </div>
+
+    <div class="fab-palette-title">Jump to Question Solution:</div>
+    <div id="fabPaletteGrid" class="fab-palette-grid">
+      <!-- 1..N buttons dynamically populated -->
+    </div>
+
+    <div class="fab-panel-actions">
+      <button id="fabBackToAutopsyBtn" class="btn-fab-autopsy" type="button">
+        ← Back to Autopsy Dashboard
+      </button>
+    </div>
+  </div>
+
+  <div id="dppToast" class="toast" role="status" aria-live="polite"></div>
+
+  <!-- Scripts -->
+  <script src="../vendor/pdfjs/pdf.min.js"></script>
+  <script src="dpp_db.js"></script>
+  <script src="dpp_parser.js"></script>
+  <script src="dpp_arena.js"></script>
+</body>
+</html>
