@@ -5,21 +5,33 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#09151d">
   <meta name="description" content="A private, data-led view of your exam practice and progress.">
-  <title>Exam Arena · You vs. You</title>
-  <link rel="icon" type="image/svg+xml" href="../assets/exam-arena-symbol.svg">
+  <title>Study Slash · You vs. You</title>
+  <link rel="icon" type="image/png" href="../assets/study-slash-icon-32.png">
   <link rel="stylesheet" href="dashboard.css">
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
   <div class="app-shell">
     <header class="topbar">
-      <a class="brand" href="#home" id="brandHome" aria-label="Exam Arena home">
-        <img class="brand-symbol" src="../assets/exam-arena-symbol.svg" alt="">
-        <span>EXAM <b>ARENA</b><small>YOUR PRACTICE, IN FOCUS</small></span>
+      <a class="brand" href="#home" id="brandHome" aria-label="Study Slash home">
+        <img class="brand-symbol" src="../assets/study-slash-logo.png" alt="">
+        <span>STUDY <b>SLASH</b><small>YOUR PRACTICE, IN FOCUS</small></span>
       </a>
       <div class="topbar-tools">
         <span class="privacy-note"><i></i> PRIVATE BY DESIGN</span>
-        <button id="launchDppBtn" class="tool-button" style="background:#0d9488; color:#fff; font-weight:700; border:none;" type="button">📄 DPP Arena</button>
+        <button id="arenaHubBtn" class="tool-button ea-arena-nav-btn" type="button">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="14.5 17.5 3 6 3 3 6 3 17.5 14.5"></polyline>
+            <line x1="13" y1="19" x2="19" y2="13"></line>
+            <line x1="16" y1="16" x2="20" y2="20"></line>
+            <line x1="19" y1="21" x2="21" y2="19"></line>
+            <polyline points="14.5 6.5 18 3 21 3 21 6 17.5 9.5"></polyline>
+            <line x1="5" y1="14" x2="9" y2="18"></line>
+            <line x1="7" y1="17" x2="4" y2="20"></line>
+            <line x1="3" y1="19" x2="5" y2="21"></line>
+          </svg>
+          <span>Arena</span>
+        </button>
         <button id="openMonthlyReportsBtn" class="tool-button" type="button">📜 Monthly Report Cards</button>
         <button id="exportAll" class="tool-button" type="button">Export</button>
         <button id="importAll" class="tool-button" type="button">Import</button>
@@ -69,11 +81,11 @@
             <div class="section-head"><div><p class="eyebrow">THE WEEK IN REVIEW</p><h2>Stamina trend</h2><p>Average +4 / −1 score for each day with a session.</p></div><span class="chart-key"><i></i> SCORE %</span></div>
             <div id="weeklyChart" class="chart-host" role="img" aria-label="Weekly exam score trend chart"></div>
           </article>
-          <article class="bleed-panel">
+          <article class="bleed-panel interactive-bleed-tile" id="negativeBleedTile" role="button" tabindex="0" title="Open Healing Center" aria-label="Negative bleeds. Open Healing Center">
             <div class="bleed-symbol" aria-hidden="true"><svg viewBox="0 0 36 36"><path d="M18 4v18m0 0 7-7m-7 7-7-7M7 25v6h22v-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
-            <p class="eyebrow">LAST 7 DAYS</p><h2>Negative bleed</h2>
-            <strong id="negativeMarks" class="bleed-value">−0</strong><p>marks lost to incorrect answers</p>
-            <div class="bleed-foot"><span id="wrongCount7d">0 wrong answers</span><span class="bleed-dot"></span><span>−1 each</span></div>
+            <span class="interactive-pill">HEALING CENTER ↗</span><h2>Negative bleeds</h2>
+            <strong id="negativeBleedTotal" class="bleed-value danger-text">0</strong><p id="negativeBleedSubtitle">0 unresolved wounds</p>
+            <div class="bleed-foot"><span id="negativeBleedBreakdown">0 healed across all archives</span></div>
           </article>
         </section>
 
@@ -91,10 +103,10 @@
           <div class="cultivation-identity">
             <div class="cultivation-badge mortal" id="cultivationBadge" aria-hidden="true"><span>34</span></div>
             <div class="cultivation-title-wrap"><h2 id="cultivationTitle">Spirit Profound Realm - Level 34</h2><p><strong id="cultivationVolume">0</strong> cumulative questions</p></div>
-            <div class="progress-percent"><strong id="cultivationPercent">85%</strong><span>this level</span></div>
+            <div class="progress-percent"><strong id="cultivationPercent">0%</strong><span>this level</span></div>
           </div>
           <div class="cultivation-xp-copy"><span>EXPERIENCE</span><strong id="cultivationXp">0 / 136 XP</strong></div>
-          <div class="progress-track cultivation-track" id="cultivationTrack" role="progressbar" aria-label="Cultivation experience progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="85"><span id="cultivationProgressFill"></span></div>
+          <div class="progress-track cultivation-track" id="cultivationTrack" role="progressbar" aria-label="Cultivation experience progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="cultivationProgressFill"></span></div>
           <div class="cultivation-path" aria-label="Path to breakthrough conditions">
             <span id="cultivationVolumeCondition">🎯 Next: +150 XP</span>
             <span id="cultivationSkillCondition">📊 Condition: &gt;35% Accuracy &amp; Positive Net Score</span>
@@ -148,7 +160,7 @@
       <section id="cultivationHallView" class="view cultivation-hall-view" hidden aria-labelledby="galleryTitle">
         <nav class="hall-topnav" aria-label="Hall navigation">
           <button id="backToDashboardBtn" class="back-link" type="button">← Return to Dashboard</button>
-          <p class="hall-breadcrumb"><span>EXAM ARENA</span><i>/</i><strong>SACRED ARCHIVE OF ASCENSION</strong></p>
+          <p class="hall-breadcrumb"><span>STUDY SLASH</span><i>/</i><strong>SACRED ARCHIVE OF ASCENSION</strong></p>
           <div class="hall-nav-tools">
             <label class="theme-control" for="hallThemeSelect"><span class="sr-only">Theme</span><select id="hallThemeSelect" aria-label="Color theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
             <span id="hallUserSummary" class="hall-user-summary">LEVEL 1 · ELEMENTARY</span>
@@ -166,7 +178,7 @@
         </section>
       </section>
     </main>
-    <footer><span class="footer-brand">EA / EXAM ARENA</span><span>Practice records stay on this device.</span><span id="sessionSource">LOCAL SESSION DATA</span></footer>
+    <footer><span class="footer-brand">SS / STUDY SLASH</span><span>Practice records stay on this device.</span><span id="sessionSource">LOCAL SESSION DATA</span></footer>
   </div>
 
   <div id="clearConfirm" class="dialog-scrim" role="presentation" hidden><section class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="clearTitle"><span class="eyebrow">BACKUP BEFORE DELETE</span><h2 id="clearTitle">Clear your exam archive?</h2><p>A JSON backup will be downloaded before the locally stored history is cleared.</p><div class="confirm-actions"><button id="clearCancel" class="tool-button" type="button">Keep my history</button><button id="confirmClear" class="tool-button tool-danger solid-danger" type="button">Export backup & clear</button></div></section></div>
@@ -224,7 +236,7 @@
           <div class="story-header">
             <div class="story-brand">
               <span class="brand-glyph">⚔️</span>
-              <span class="brand-text">EXAM ARENA</span>
+              <span class="brand-text">STUDY SLASH</span>
             </div>
             <div class="story-month-tag" id="cardMonthTag">SEPTEMBER 2026</div>
           </div>
@@ -254,7 +266,64 @@
     </div>
   </div>
 
+  <!-- Arena Selection Modal -->
+  <div id="arenaHubModal" class="ea-modal-backdrop" hidden>
+    <div class="ea-arena-dialog" role="dialog" aria-modal="true" aria-labelledby="arenaDialogTitle">
+      <div class="ea-arena-dialog-head">
+        <div>
+          <p class="eyebrow">CHOOSE YOUR BATTLEGROUND</p>
+          <h2 id="arenaDialogTitle">Enter The Arena</h2>
+        </div>
+        <button id="closeArenaHubModalBtn" class="tool-button tool-close" type="button" aria-label="Close">✕</button>
+      </div>
+
+      <div class="ea-arena-cards-grid">
+        <!-- Option 1: Marks Online Arena -->
+        <div class="ea-arena-choice-card" id="chooseMarksArenaCard">
+          <div class="choice-icon-wrap icon-marks">🎯</div>
+          <div class="choice-body">
+            <div class="choice-title-row">
+              <h3>Marks Site Arena</h3>
+              <span class="choice-badge badge-live">LIVE CBT</span>
+            </div>
+            <p>Online chapter-wise test series and PYQ testing on Marks app with active distraction shielding and real-time masking.</p>
+            <div class="choice-features">
+              <span>✓ In-Page Hovering Hub</span>
+              <span>✓ Auto-Focus Shield</span>
+              <span>✓ Instant Autopsy</span>
+            </div>
+          </div>
+          <button id="launchMarksArenaBtn" class="ea-btn-choice primary" type="button">
+            Enter Marks Site ↗
+          </button>
+        </div>
+
+        <!-- Option 2: DPP Offline PDF Arena -->
+        <div class="ea-arena-choice-card" id="chooseDppArenaCard">
+          <div class="choice-icon-wrap icon-dpp">📄</div>
+          <div class="choice-body">
+            <div class="choice-title-row">
+              <h3>DPP PDF Arena</h3>
+              <span class="choice-badge badge-pdf">OFFLINE TESTS</span>
+            </div>
+            <p>Practice standard offline DPPs and Allen/PW/Aakash test PDFs with embedded answer key auto-grading and CBT console.</p>
+            <div class="choice-features">
+              <span>✓ Auto-Grading & Scoring</span>
+              <span>✓ Answer Key Gatekeeper</span>
+              <span>✓ PDF Split View</span>
+            </div>
+          </div>
+          <button id="launchDppArenaBtn" class="ea-btn-choice secondary" type="button">
+            Enter DPP Arena →
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="cultivation-store.js"></script>
   <script src="cultivation-visuals.js"></script>
   <script src="dpp_db.js"></script>
   <script src="dashboard.js"></script>

@@ -262,7 +262,7 @@
     overlay.id = "examarena-yt-shield";
     overlay.innerHTML = `
       <div class="shield-card">
-        <div class="shield-badge">🛡️ EXAM ARENA FOCUS</div>
+        <div class="shield-badge">🛡️ STUDY SLASH FOCUS</div>
         <h2>Non-Study Video Blocked</h2>
         <p>Focus Mode is active. Only academic lectures, concept explanations, and problem-solving sessions are permitted.</p>
         <div class="shield-actions">

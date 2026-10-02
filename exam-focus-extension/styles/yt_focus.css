@@ -1,4 +1,4 @@
-/* Exam Arena — YouTube Study Shield Styles */
+/* Study Slash — YouTube Study Shield Styles */
 
 /* 1. Shorts Elimination (Sidebar & In-Feed Shelves) */
 ytd-guide-entry-renderer:has(a[title='Shorts']),
@@ -236,4 +236,3 @@ body.ea-focus-active ytd-browse[page-subtype="channels"] ytd-horizontal-card-lis
 body.ea-focus-active ytd-channel-video-player-renderer:not(.ea-verified-study) {
   display: none !important;
 }
-

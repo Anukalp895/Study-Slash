@@ -1,9 +1,16 @@
+importScripts("dashboard/cultivation-store.js");
 const KEYS = { active: "examModeActive", started: "examStartedAt", snapshot: "examSnapshot", session: "examSession", history: "examHistory", lastReport: "lastReport", config: "examConfig" };
 const TEST_HOST = "getmarks.app";
 const SEARCH_HOSTS = ["google.", "bing.com", "duckduckgo.com", "yahoo.com", "search.brave.com", "ecosia.org"];
 const lastAllowedByTab = new Map();
 let endingSession = false;
 let sessionWriteQueue = Promise.resolve();
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === "local" && (changes.examHistory || changes.dpp_history)) {
+    void CultivationStore.syncProgressFromStorage().catch((error) => console.error("Cultivation ledger sync failed:", error));
+  }
+});
 
 function serializeSessionWrite(operation) {
   const pending = sessionWriteQueue.then(operation, operation);
@@ -14,10 +21,59 @@ function serializeSessionWrite(operation) {
 const getState = () => chrome.storage.local.get(Object.values(KEYS));
 function sessionStartMs(session) {
   if (Number(session?.startedAtMs) > 0) return Number(session.startedAtMs);
-  const raw = session?.startedAt;
+  const raw = session?.startedAt || session?.startTime || session?.date || session?.timestamp;
   if (typeof raw === "number") return raw;
   if (typeof raw === "string" && /^\d{10,13}$/.test(raw)) return Number(raw);
   return Date.parse(raw) || 0;
+}
+function localDayKey(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+function calculateBackgroundStreak(sessions) {
+  const streakDays = new Set();
+  (Array.isArray(sessions) ? sessions : []).forEach((session) => {
+    const key = localDayKey(new Date(sessionStartMs(session) || 0));
+    const questions = Object.entries(session?.questions || {});
+    const visited = questions.filter(([id, q]) => {
+      if (q?.cultivationResolved) return true;
+      const status = q?.outcome || session?.outcomes?.[id] || "Unattempted";
+      return !q?.isPlaceholder && status !== "Not Visited";
+    });
+    if (visited.length) streakDays.add(key);
+  });
+  let streak = 0;
+  const cursor = new Date();
+  if (!streakDays.has(localDayKey(cursor))) cursor.setDate(cursor.getDate() - 1);
+  while (streakDays.has(localDayKey(cursor))) {
+    streak += 1;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  return streak;
+}
+function calculateBackgroundMonthlyProgress(sessions, monthlyGoal = 300) {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth() + 1;
+  const cultivatedSet = new Set();
+  (Array.isArray(sessions) ? sessions : []).forEach((session) => {
+    const sDate = new Date(sessionStartMs(session));
+    if (sDate.getFullYear() !== year || (sDate.getMonth() + 1) !== month) return;
+    Object.entries(session.questions || {}).forEach(([qid, q]) => {
+      if (q.outcome === "Right" || q.outcome === "Wrong") {
+        cultivatedSet.add(`${session.sessionId || session.date || session.startedAt || session.timestamp}_${qid}`);
+      }
+    });
+    (session.reattemptLedger || []).forEach((reattempt) => {
+      const orig = session.questions?.[reattempt.questionId];
+      if (orig && (orig.outcome === "Unattempted" || !orig.outcome)) {
+        if (reattempt.outcome === "Right" || reattempt.outcome === "Wrong") {
+          cultivatedSet.add(`${session.sessionId || session.date || session.startedAt || session.timestamp}_${reattempt.questionId}`);
+        }
+      }
+    });
+  });
+  const target = Math.max(1, Number(monthlyGoal) || 300);
+  return Math.min(100, Math.round(cultivatedSet.size / target * 100));
 }
 function sessionIdentity(session) { return String(session?.sessionId || sessionStartMs(session)); }
 function compactQuestionUrl(raw) {
@@ -112,7 +168,16 @@ async function completeSession(reason = "manual", finalQuestionState = null) {
       await chrome.storage.local.set({ [KEYS.active]: false });
       await chrome.storage.local.remove([KEYS.session, KEYS.started, KEYS.snapshot, KEYS.config]);
     } else {
-      await chrome.storage.local.set({ [KEYS.active]: false, [KEYS.history]: [report, ...history].slice(0, 25), [KEYS.lastReport]: report });
+      const updatedHistory = [report, ...history].slice(0, 25);
+      const computedStreak = calculateBackgroundStreak(updatedHistory);
+      const computedMonthlyPct = calculateBackgroundMonthlyProgress(updatedHistory);
+      await chrome.storage.local.set({
+        [KEYS.active]: false,
+        [KEYS.history]: updatedHistory,
+        [KEYS.lastReport]: report,
+        streakDays: computedStreak,
+        monthlyTargetPercent: computedMonthlyPct
+      });
     }
     await chrome.alarms.clear("examfocus-deadline");
     chrome.action.setBadgeText({ text: "" });
@@ -194,10 +259,59 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ ok: true }); return;
     }
     if (message?.type === "OPEN_DASHBOARD") {
-      const dashboardUrl = new URL(chrome.runtime.getURL("dashboard/dashboard.html"));
-      if (message.sessionId != null) dashboardUrl.searchParams.set("sessionId", String(message.sessionId));
-      const tab = await chrome.tabs.create({ url: dashboardUrl.toString() });
-      sendResponse({ ok: true, tabId: tab.id }); return;
+      const dashUrl = chrome.runtime.getURL("dashboard/dashboard.html");
+      const tabs = await chrome.tabs.query({ url: dashUrl });
+      if (tabs.length > 0 && tabs[0].id != null) {
+        await chrome.tabs.update(tabs[0].id, { active: true });
+        if (tabs[0].windowId != null) {
+          await chrome.windows.update(tabs[0].windowId, { focused: true }).catch(() => {});
+        }
+      } else {
+        await chrome.tabs.create({ url: dashUrl });
+      }
+      sendResponse({ ok: true }); return;
+    }
+    if (message?.type === "START_SESSION") {
+      const rawConfig = message.config || {};
+      const examName = String(rawConfig.examName || "Marks Practice Session").trim().replace(/\s+/g, " ");
+      const subject = String(rawConfig.subject || "Marks Practice").trim().replace(/\s+/g, " ");
+      const mode = rawConfig.mode === "countdown" ? "countdown" : "stopwatch";
+      const targetQuestions = (rawConfig.targetQuestions !== undefined && rawConfig.targetQuestions !== null && rawConfig.targetQuestions !== "")
+        ? Number(rawConfig.targetQuestions)
+        : null;
+      const startedAtMs = Date.now();
+      const startedAt = new Date(startedAtMs).toISOString();
+      const sessionId = String(rawConfig.sessionId || crypto.randomUUID());
+      endingSession = false;
+      await chrome.alarms.clear("examfocus-deadline");
+      const tabs = await chrome.tabs.query({});
+      const activeTab = tabs.find((tab) => tab.active && tab.url && /^https?:/.test(tab.url));
+      const allowedHosts = [...new Set(tabs.map((tab) => hostname(tab.url)).filter(Boolean))];
+      const snapshot = { takenAt: startedAtMs, allowedHosts, allowedTabIds: tabs.filter((tab) => tab.id != null).map((tab) => tab.id), fallbackUrl: activeTab?.url || "https://web.getmarks.app/" };
+      const minutes = rawConfig.allottedMinutes ? Number(rawConfig.allottedMinutes) : (rawConfig.allottedTimeMs ? Math.round(Number(rawConfig.allottedTimeMs) / 60000) : 45);
+      const allottedTimeMs = mode === "countdown" ? (rawConfig.allottedTimeMs ? Number(rawConfig.allottedTimeMs) : minutes * 60000) : null;
+      const config = {
+        mode,
+        allottedTimeMs,
+        targetQuestions,
+        sessionId,
+        examName,
+        subject,
+        startedAt,
+        startedAtMs,
+        source: rawConfig.source || "marks",
+        ...(mode === "countdown" ? { countdownSettings: { allottedMinutes: minutes, ...(targetQuestions ? { questionCap: targetQuestions } : {}) } } : {})
+      };
+      const session = { ...config, questions: {}, outcomes: {}, completedQuestionIds: [], reviewQuestionIds: [] };
+      await chrome.storage.local.remove([KEYS.lastReport]);
+      for (const tab of tabs) if (tab.id != null && tab.url && isAllowed(tab.url, { allowedHosts })) lastAllowedByTab.set(tab.id, tab.url);
+      await chrome.storage.local.set({ [KEYS.active]: true, focusModeActive: true, [KEYS.started]: snapshot.takenAt, [KEYS.snapshot]: snapshot, [KEYS.config]: config, [KEYS.session]: session });
+      await syncFocusRules(true);
+      if (mode === "countdown" && allottedTimeMs) {
+        chrome.alarms.create("examfocus-deadline", { when: startedAtMs + allottedTimeMs });
+      }
+      chrome.action.setBadgeText({ text: "ON" }); chrome.action.setBadgeBackgroundColor({ color: "#087e66" });
+      sendResponse({ ok: true }); return;
     }
     if (message?.type === "GET_STATE") { sendResponse(await getState()); return; }
     if (message?.type === "TOGGLE_FOCUS_MODE") {
@@ -302,6 +416,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const questionUrl = compactQuestionUrl(message.url) || existing.url;
         session.questions[id] = {
           ...existing,
+          questionId: id,
           timeMs: existing.timeMs + Math.max(0, Number(message.dwellMs) || 0),
           visits: existing.visits + (message.entered ? 1 : 0),
           ...(!existing.firstSeenAt && message.entered ? { firstSeenAt: Date.now() } : {}),
@@ -419,6 +534,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           if (targetSession.questions[questionId]) {
             targetSession.questions[questionId].cultivationResolved = true;
             targetSession.questions[questionId].reattemptSuccess = true;
+            targetSession.questions[questionId].healed = true;
+            targetSession.questions[questionId].healedAt = Number(message.timestamp) || Date.now();
           }
         }
 
@@ -439,6 +556,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           if (outcome === "Right") {
             targetSession.questions[questionId].cultivationResolved = true;
             targetSession.questions[questionId].reattemptSuccess = true;
+            targetSession.questions[questionId].healed = true;
+            targetSession.questions[questionId].healedAt = Number(message.timestamp) || Date.now();
             xpDelta = 10;
           } else if (outcome === "Wrong") {
             xpDelta = -5;
@@ -470,7 +589,41 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
       sendResponse(result); return;
     }
-    if (message?.type === "CLEAR_HISTORY") { await chrome.storage.local.set({ [KEYS.history]: [], [KEYS.lastReport]: null }); sendResponse({ ok: true }); return; }
+    if (message?.type === "RECORD_CONCEPT_REVIEW") {
+      const data = await chrome.storage.local.get([KEYS.history, "dpp_history"]);
+      const history = Array.isArray(data[KEYS.history]) ? [...data[KEYS.history]] : [];
+      const dppHistory = Array.isArray(data.dpp_history) ? [...data.dpp_history] : [];
+      const dwellMs = Math.max(0, Number(message.dwellMs) || 0);
+      const timestamp = Number(message.timestamp) || Date.now();
+      const reviewId = String(message.reviewId || `${message.sessionId || "session"}:${message.questionId || "question"}:${timestamp}`).slice(0, 240);
+      if (!history.some((entry) => entry.conceptReviewId === reviewId)) {
+        const qualified = message.isConceptReview === true && message.conceptQualified === true && dwellMs >= 60_000 && dwellMs <= 270_000;
+        history.push({ sessionId: `concept_${timestamp}_${Math.random().toString(36).slice(2, 8)}`, conceptReviewId: reviewId,
+          sourceSessionId: String(message.sessionId || ""), questionId: String(message.questionId || ""),
+          examName: "Concept Review", subject: "Revision", startedAt: timestamp, completedAt: timestamp,
+          dwellMs, isConceptReview: true, conceptQualified: qualified, cultivationXpGained: 0 });
+      }
+      const qualified = message.isConceptReview === true && message.conceptQualified === true && dwellMs >= 60_000 && dwellMs <= 270_000;
+      if (qualified) {
+        const markHealed = (session) => {
+          if (String(session.sessionId || session.id || "") !== String(message.sessionId || "")) return session;
+          if (Array.isArray(session.questions)) {
+            const q = session.questions[Number(message.questionId) - 1];
+            if (q) { q.healed = true; q.healedAt = timestamp; }
+          } else if (session.questions?.[String(message.questionId)]) {
+            session.questions[String(message.questionId)].healed = true;
+            session.questions[String(message.questionId)].healedAt = timestamp;
+          }
+          return session;
+        };
+        for (let i = 0; i < history.length; i++) history[i] = markHealed(history[i]);
+        for (let i = 0; i < dppHistory.length; i++) dppHistory[i] = markHealed(dppHistory[i]);
+      }
+      const progress = CultivationStore.deriveProgressFromHistories(history, dppHistory);
+      await chrome.storage.local.set({ [KEYS.history]: history, dpp_history: dppHistory, [CultivationStore.CULTIVATION_KEY]: progress });
+      sendResponse({ ok: true, progress }); return;
+    }
+    if (message?.type === "CLEAR_HISTORY") { await CultivationStore.clearAllStudentLogs(); await chrome.storage.local.set({ [KEYS.lastReport]: null }); sendResponse({ ok: true }); return; }
     if (message?.type === "NAVIGATION_BLOCKED") { setBlockedBadge(); sendResponse({ ok: true }); }
   })().catch((error) => sendResponse({ ok: false, error: String(error) }));
   return true;

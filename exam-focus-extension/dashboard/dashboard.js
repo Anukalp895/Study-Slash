@@ -29,8 +29,18 @@ const CULTIVATION_REALMS = [
 ];
 const CULTIVATION_LORE = ["The Iron Chevron", "The Emerald Twin Blades", "The Cobalt Vanguard Shield", "The Spectral Wing Talisman", "The Amber Bastion Plate", "The Azure Wing Crest", "The Cinnabar Martial Sovereign", "The Obsidian Overlord Crest", "The Astral Monarch Compass", "The Blooming Vitality Lotus", "The Sacred Soul Sigil", "The Tribulation Lightning Seal", "The Prismatic Spirit Star", "The Solar Mandala Crest", "The Midnight Celestial Star", "The Divine Sun-Gear", "The Gravitational Void", "The Eternal Golden Flame", "The Iridescent Nebula Vortex", "The Primordial Cosmic Eye"];
 let cultivationSnapshot = null;
+let ledgerProgress = null;
 let hallRealmIndex = 0;
 let hallSublevel = 1;
+function renderNegativeBleedsTile(bleeds) {
+  const active = bleeds.filter(item => !item.healed).length;
+  const healed = bleeds.length - active;
+  $("negativeBleedTotal").textContent = String(active);
+  $("negativeBleedSubtitle").textContent = `${active} unresolved ${active === 1 ? "wound" : "wounds"}`;
+  $("negativeBleedBreakdown").textContent = `${healed} healed across all archives`;
+}
+$("negativeBleedTile")?.addEventListener("click", () => { window.location.href = "healing_center.html"; });
+$("negativeBleedTile")?.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); $("negativeBleedTile").click(); } });
 
 function getCumulativeXpForLevel(level) {
   const boundedLevel = Math.min(199, Math.max(1, Math.floor(Number(level) || 1)));
@@ -57,7 +67,7 @@ function localDayKey(date) {
 }
 function sessionTimestamp(session) {
   if (Number(session?.startedAtMs) > 0) return Number(session.startedAtMs);
-  const raw = session?.startedAt;
+  const raw = session?.startedAt || session?.startTime || session?.date || session?.timestamp;
   if (typeof raw === "number") return raw;
   if (typeof raw === "string" && /^\d{10,13}$/.test(raw)) return Number(raw);
   return Date.parse(raw) || 0;
@@ -135,7 +145,7 @@ function buildCultivationState(sessions) {
   questions.forEach((item, index) => {
     const duration = Number(item.question.timeMs) || 0;
     if (duration < 15000) return;
-    if (item.status === "Wrong" && !item.question.cultivationResolved) {
+    if (item.status === "Wrong" && !item.question.cultivationResolved && !item.question.healed) {
       const damage = index + 1 >= 16000 ? 25 : index + 1 >= 10000 ? 10 : 5;
       currentDebt += damage; return;
     }
@@ -153,7 +163,6 @@ function buildCultivationState(sessions) {
     maxCorrectRun: Math.max(0, ...correctRunByQuestion.values()),
     last3NetPositive: recentPositiveNet
   };
-  localSet(CULTIVATION_KEY, JSON.stringify({ total_questions_logged: cultivation.total_questions_logged, current_debt: currentDebt, rolling_accuracy: rawAccuracy, subject_grasp: subjectGrasp, current_streak: currentStreak, xp: cultivation.xp, total_xp: cultivation.total_xp, lifetime_xp: cultivation.lifetime_xp }));
   return cultivation;
 }
 function checkRealmConditions(realm, level, cultivation) {
@@ -206,12 +215,12 @@ function getSubLevelDirective(cultivation, level) {
 function renderCultivation(cultivation) {
   const previousLevel = Number(localGet("exam-arena-last-cultivation-level", "0")) || 0;
   const xpLevel = deriveLevelFromTotalXp(cultivation.xp);
-  let level = 1;
+  let level = cultivation.total_xp > 0 ? 1 : 0;
   for (let candidate = 2; candidate <= xpLevel; candidate += 1) {
     if (!checkAllCultivationConditions(cultivation, candidate).eligible) break;
     level = candidate;
   }
-  const realm = realmForLevel(level); const insideLevel = level - realm.start + 1;
+  const realm = level === 0 ? CULTIVATION_REALMS[0] : realmForLevel(level); const insideLevel = level === 0 ? 1 : level - realm.start + 1;
   const xpThreshold = getCumulativeXpForLevel(level);
   const nextLevelXp = getXpForNextSubLevel(level);
   const levelXp = Math.max(0, cultivation.xp - xpThreshold);
@@ -222,10 +231,11 @@ function renderCultivation(cultivation) {
   const newRealmIndex = CULTIVATION_REALMS.indexOf(realm);
   cultivationSnapshot = { cultivation, level, realm, realmIndex: newRealmIndex, insideLevel, levelXp: displayedLevelXp, nextLevelXp, progress, gate, directive };
   const totalXp = Math.max(0, Number(cultivation.total_xp ?? cultivation.xp) || 0);
+
   const xpLabel = `${totalXp.toLocaleString()} XP`;
   $("dashboardTotalXp").textContent = xpLabel;
   $("hallTotalXp").textContent = xpLabel;
-  $("cultivationTitle").textContent = `${realm.name} Realm - Level ${level}`;
+  $("cultivationTitle").textContent = level === 0 ? "Uninitiated / Mortal" : `${realm.name} Realm - Level ${level}`;
   $("cultivationLevelLabel").textContent = `LEVEL ${level} / 199`;
   const badge = $("cultivationBadge"); badge.className = `cultivation-badge ${level >= 160 ? "god" : level >= 91 ? "divine" : "mortal"}`;
   badge.setAttribute("aria-label", `${realm.name} Realm, level ${level}, sub-level ${CultivationVisuals.toRoman(insideLevel)}`);
@@ -263,8 +273,8 @@ function renderCultivation(cultivation) {
   const fill = $("cultivationProgressFill"); fill.classList.toggle("wounded", wounded);
   renderCultivationRoadmap(cultivation, level, realm, gate);
   $("heroCultivationEyebrow").textContent = `CURRENT REALM · TIER ${CultivationVisuals.toRoman(insideLevel)}`;
-  $("heroCultivationTitle").textContent = `${realm.name} Realm`;
-  $("heroCultivationLevel").textContent = `Level ${level} / 199 · Tier ${CultivationVisuals.toRoman(insideLevel)}`;
+  $("heroCultivationTitle").textContent = level === 0 ? "Uninitiated / Mortal" : `${realm.name} Realm`;
+  $("heroCultivationLevel").textContent = level === 0 ? "Level 0 / 199 · Uninitiated" : `Level ${level} / 199 · Tier ${CultivationVisuals.toRoman(insideLevel)}`;
   $("heroCultivationXp").textContent = level >= 199
     ? `MAX · ${getCumulativeXpForLevel(199).toLocaleString()} XP`
     : `${displayedLevelXp.toLocaleString()} / ${nextLevelXp.toLocaleString()} XP`;
@@ -1145,7 +1155,7 @@ async function exportStatusCardToPng(report, realmInfo, cardType = "realm") {
   ctx.font = "bold 38px 'SF Mono', ui-monospace, monospace, sans-serif";
   ctx.textAlign = "left";
   const brandSub = cardType === "combat" ? "COMBAT INTEL" : cardType === "focus" ? "DISCIPLINE DOSSIER" : cardType === "summary" ? "MONTHLY CHRONICLE" : "CULTIVATION LOG";
-  ctx.fillText(`⚔️ EXAM ARENA · ${brandSub}`, 90, 140);
+  ctx.fillText(`⚔️ STUDY SLASH · ${brandSub}`, 90, 140);
 
   ctx.fillStyle = "#94a3b8";
   ctx.font = "bold 32px -apple-system, BlinkMacSystemFont, sans-serif";
@@ -1337,7 +1347,7 @@ async function exportStatusCardToPng(report, realmInfo, cardType = "realm") {
     ctx.fillStyle = "#cbd5e1";
     ctx.font = "26px sans-serif";
     ctx.fillText("Social feeds, video leaks, and short-form algorithms neutralized.", 540, 1160);
-    ctx.fillText("Protected by Exam Arena Focus Guard & Study Shield.", 540, 1205);
+  ctx.fillText("Protected by Study Slash Focus Guard & Study Shield.", 540, 1205);
 
   } else {
     // Summary Overview Card
@@ -1447,32 +1457,30 @@ function renderGlobal(sessions) {
   $("monthlyTargetRemaining").textContent = `${Math.max(0, target - volume)} to go`;
   $("monthlyProgressCaption").textContent = volume >= target ? "Monthly cultivation target reached. Keep your rhythm." : "Every cultivated question moves the line.";
   const cultivation = buildCultivationState(sessions);
-  if (!cultivation.total_questions_logged) {
-    cultivation.xp = getCumulativeXpForLevel(34) + Math.round(getXpForNextSubLevel(34) * 0.85);
-    cultivation.total_xp = cultivation.xp;
-    cultivation.lifetime_xp = cultivation.xp;
-    cultivation.total_questions_logged = 650;
-    cultivation.current_debt = 0;
-    cultivation.rawAccuracy = 85;
-    cultivation.rolling_accuracy = 85;
-    cultivation.last3NetPositive = true;
-    cultivation.recentPositiveNet = true;
-  }
+  const derivedProgress = ledgerProgress || CultivationStore.createZeroState();
+  Object.assign(cultivation, { xp: derivedProgress.total_xp, total_xp: derivedProgress.total_xp,
+    lifetime_xp: derivedProgress.lifetime_xp, total_questions_logged: derivedProgress.total_questions_logged,
+    current_debt: derivedProgress.current_debt, rawAccuracy: derivedProgress.accuracy });
   renderCultivation(cultivation);
 
-  const recentKeys = new Set(Array.from({ length: 7 }, (_, offset) => { const d = new Date(); d.setDate(d.getDate() - offset); return localDayKey(d); }));
-  let wrong7d = 0; let streakDays = new Set();
+  let streakDays = new Set();
   sessions.forEach((session) => {
     const key = localDayKey(new Date(sessionTimestamp(session) || 0));
-    if (recentKeys.has(key)) wrong7d += sessionStats(session).wrong;
     if (sessionStats(session).visited.length) streakDays.add(key);
   });
-  $("negativeMarks").textContent = `−${wrong7d}`; $("wrongCount7d").textContent = `${wrong7d} ${wrong7d === 1 ? "wrong answer" : "wrong answers"}`;
   let streak = 0; const cursor = new Date();
   if (!streakDays.has(localDayKey(cursor))) cursor.setDate(cursor.getDate() - 1);
   while (streakDays.has(localDayKey(cursor))) { streak += 1; cursor.setDate(cursor.getDate() - 1); }
   $("streakCount").textContent = String(streak);
   $("streakCaption").textContent = streak ? (streak === 1 ? "One day in motion. Come back tomorrow." : "A steady habit is taking shape.") : "Log a session to start your run.";
+
+  if (typeof chrome !== "undefined" && chrome.storage?.local) {
+    chrome.storage.local.set({
+      streakDays: streak,
+      monthlyTargetPercent: Math.round(monthlyProgress)
+    }).catch(console.error);
+  }
+
   renderWeeklyAnalytics(sessions);
 }
 function renderHistory(sessions) {
@@ -2052,11 +2060,13 @@ function showToast(message, error = false) {
   clearTimeout(showToast.timer); showToast.timer = setTimeout(() => toast.classList.remove("shown"), 3600);
 }
 async function load() {
-  const data = await chrome.storage.local.get(["examHistory", "examSession", "examModeActive"]);
+  ledgerProgress = await CultivationStore.syncProgressFromStorage();
+  const data = await chrome.storage.local.get(["examHistory", "dpp_history", "examSession", "examModeActive"]);
   state.history = Array.isArray(data.examHistory) ? data.examHistory : [];
   state.session = data.examSession || null; state.active = Boolean(data.examModeActive);
   const sessions = sessionsForView();
   $("sessionSource").textContent = "LOCAL SESSION DATA";
+  renderNegativeBleedsTile(CultivationStore.extractAllTimeBleeds(state.history, data.dpp_history, state.active ? state.session : null));
   renderGlobal(sessions); renderSubjectMastery(sessions); renderHistory(sessions);
   await checkMonthlyRollover().catch((err) => console.error("Monthly rollover check failed:", err));
   if (location.hash === "#/hall-of-cultivation") { openCultivationHall(false); return; }
@@ -2076,7 +2086,35 @@ function downloadJson(data, filename) {
   return new Promise((resolve) => setTimeout(() => { URL.revokeObjectURL(url); resolve(); }, 250));
 }
 function allStoredSessions() { return sessionsForView().map(({ inProgress, ...session }) => session); }
-$("launchDppBtn")?.addEventListener("click", () => { window.location.href = "dpp_arena.html"; });
+const arenaHubBtn = $("arenaHubBtn");
+const arenaHubModal = $("arenaHubModal");
+const closeArenaHubModalBtn = $("closeArenaHubModalBtn");
+const launchMarksArenaBtn = $("launchMarksArenaBtn");
+const launchDppArenaBtn = $("launchDppArenaBtn");
+
+arenaHubBtn?.addEventListener("click", () => {
+  if (arenaHubModal) arenaHubModal.hidden = false;
+});
+
+closeArenaHubModalBtn?.addEventListener("click", () => {
+  if (arenaHubModal) arenaHubModal.hidden = true;
+});
+
+arenaHubModal?.addEventListener("click", (e) => {
+  if (e.target === arenaHubModal) arenaHubModal.hidden = true;
+});
+
+// Option 1: Open Marks App
+launchMarksArenaBtn?.addEventListener("click", () => {
+  if (arenaHubModal) arenaHubModal.hidden = true;
+  chrome.tabs.create({ url: "https://web.getmarks.app" });
+});
+
+// Option 2: Open DPP Arena
+launchDppArenaBtn?.addEventListener("click", () => {
+  if (arenaHubModal) arenaHubModal.hidden = true;
+  window.location.href = "dpp_arena.html";
+});
 $("exportAll").addEventListener("click", async () => {
   await downloadJson({ exportedAt: Date.now(), sessions: allStoredSessions() }, `exam-arena-backup-${new Date().toISOString().slice(0, 10)}.json`);
   showToast("Backup export started.");
@@ -2087,13 +2125,12 @@ $("importFileInput").addEventListener("change", async (event) => {
   try {
     const parsed = JSON.parse(await file.text()); const imported = Array.isArray(parsed) ? parsed : (parsed.sessions || parsed.examHistory);
     if (!Array.isArray(imported)) throw new Error("Backup must contain a sessions array.");
-    const valid = imported.filter((item) => item && sessionTimestamp(item) > 0 && item.questions && typeof item.questions === "object" && !Array.isArray(item.questions));
+    const valid = imported.filter((item) => item && sessionTimestamp(item) > 0 &&
+      (item.isConceptReview === true || item.questions && typeof item.questions === "object" && !Array.isArray(item.questions)));
     if (valid.length !== imported.length) throw new Error("Backup contains invalid session records.");
-    const stored = await chrome.storage.local.get("examHistory"); const map = new Map((Array.isArray(stored.examHistory) ? stored.examHistory : []).map((session) => [sessionIdentity(session), session]));
-    let added = 0;
-    valid.forEach((item) => { const key = sessionIdentity(item); if (!map.has(key)) { const clean = { ...item }; delete clean.id; delete clean.inProgress; map.set(key, clean); added += 1; } });
-    await chrome.storage.local.set({ examHistory: [...map.values()].sort((a, b) => sessionTimestamp(b) - sessionTimestamp(a)) });
-    await load(); showToast(`Imported ${added} ${added === 1 ? "session" : "sessions"}.`);
+    const clean = valid.map((item) => { const copy = { ...item }; delete copy.id; delete copy.inProgress; return copy; });
+    await CultivationStore.importBackupCleanOverwrite({ ...parsed, examHistory: clean });
+    await load(); showToast(`Replaced archive with ${clean.length} ${clean.length === 1 ? "session" : "sessions"}.`);
   } catch (error) { showToast(`Import failed: ${error.message}`, true); }
 });
 $("clearAll")?.addEventListener("click", () => {
@@ -2276,7 +2313,7 @@ window.addEventListener("keydown", (event) => {
 });
 
 chrome.storage.onChanged.addListener((changes) => {
-  if (["examHistory", "examSession", "examModeActive"].some((key) => key in changes)) void load();
+  if (["examHistory", "dpp_history", "examSession", "examModeActive"].some((key) => key in changes)) void load();
 });
 load().catch((error) => showToast(`Could not load practice data: ${error.message}`, true));
 

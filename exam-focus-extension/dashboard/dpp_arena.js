@@ -240,9 +240,11 @@
   async function enterFullReattemptMode(sessionId) {
     try {
       showToast('Loading Full DPP Reattempt...');
-      const stored = await chrome.storage.local.get(['examHistory', 'lastReport']);
+      const stored = await chrome.storage.local.get(['examHistory', 'dpp_history', 'lastReport']);
       const history = Array.isArray(stored.examHistory) ? stored.examHistory : [];
+      const dppHistory = Array.isArray(stored.dpp_history) ? stored.dpp_history : [];
       let session = history.find((s) => s.sessionId === sessionId);
+      if (!session) session = dppHistory.find((s) => String(s.sessionId || s.id) === sessionId);
       if (!session && stored.lastReport?.sessionId === sessionId) {
         session = stored.lastReport;
       }
@@ -370,9 +372,11 @@
   async function enterReattemptMode(sessionId, targetQ = 1) {
     try {
       showToast('Loading DPP Session Reattempt...');
-      const stored = await chrome.storage.local.get(['examHistory', 'lastReport']);
+      const stored = await chrome.storage.local.get(['examHistory', 'dpp_history', 'lastReport']);
       const history = Array.isArray(stored.examHistory) ? stored.examHistory : [];
+      const dppHistory = Array.isArray(stored.dpp_history) ? stored.dpp_history : [];
       let session = history.find((s) => s.sessionId === sessionId);
+      if (!session) session = dppHistory.find((s) => String(s.sessionId || s.id) === sessionId);
       if (!session && stored.lastReport?.sessionId === sessionId) {
         session = stored.lastReport;
       }
@@ -498,10 +502,12 @@
       });
 
       // 2. Also update session locally in examHistory to ensure immediate consistency
-      const stored = await chrome.storage.local.get(['examHistory', 'lastReport']);
+      const stored = await chrome.storage.local.get(['examHistory', 'dpp_history', 'lastReport']);
       const history = Array.isArray(stored.examHistory) ? [...stored.examHistory] : [];
+      const dppHistory = Array.isArray(stored.dpp_history) ? [...stored.dpp_history] : [];
       let sIdx = history.findIndex((s) => s.sessionId === state.sessionId);
-      let session = sIdx >= 0 ? history[sIdx] : stored.lastReport;
+      let dppIdx = dppHistory.findIndex((s) => String(s.sessionId || s.id) === state.sessionId);
+      let session = sIdx >= 0 ? history[sIdx] : dppIdx >= 0 ? dppHistory[dppIdx] : stored.lastReport;
 
       if (session) {
         session.questions ||= {};
@@ -517,11 +523,14 @@
 
         // Anti-exploit: only heal wound and adjust score if was not already correct or resolved
         if (isRight && !wasAlreadyRight && !wasAlreadyResolved) {
+          qObj.preReattemptOutcome ||= prevOutcome;
           qObj.outcome = 'Right';
           session.outcomes ||= {};
           session.outcomes[qid] = 'Right';
           qObj.cultivationResolved = true;
           qObj.reattemptSuccess = true;
+          qObj.healed = true;
+          qObj.healedAt = Date.now();
 
           session.stats ||= {};
           if (prevOutcome === 'Wrong') {
@@ -553,9 +562,11 @@
 
         if (sIdx >= 0) {
           history[sIdx] = session;
+        } else if (dppIdx >= 0) {
+          dppHistory[dppIdx] = session;
         }
 
-        const updates = { examHistory: history };
+        const updates = { examHistory: history, dpp_history: dppHistory };
         if (stored.lastReport?.sessionId === state.sessionId) {
           updates.lastReport = session;
         }
@@ -584,9 +595,11 @@
   async function enterSolutionMode(sessionId, targetQ = 1) {
     try {
       showToast('Loading DPP Session Autopsy...');
-      const stored = await chrome.storage.local.get(['examHistory', 'lastReport']);
+      const stored = await chrome.storage.local.get(['examHistory', 'dpp_history', 'lastReport']);
       const history = Array.isArray(stored.examHistory) ? stored.examHistory : [];
+      const dppHistory = Array.isArray(stored.dpp_history) ? stored.dpp_history : [];
       let session = history.find((s) => s.sessionId === sessionId);
+      if (!session) session = dppHistory.find((s) => String(s.sessionId || s.id) === sessionId);
       if (!session && stored.lastReport?.sessionId === sessionId) {
         session = stored.lastReport;
       }
@@ -766,17 +779,27 @@
     const prev = session.conceptReview[qid] || { dwellMs: 0 };
     session.conceptReview[qid] = { dwellMs: Math.max(0, Number(prev.dwellMs) || 0) + elapsed, status: status === 'Completed' || prev.status === 'Completed' ? 'Completed' : 'Visited', lastReviewedAt: at };
     conceptTimerStartedAt = 0;
-    const stored = await chrome.storage.local.get(['examHistory', 'lastReport']);
+    const stored = await chrome.storage.local.get(['examHistory', 'dpp_history', 'lastReport']);
     const history = Array.isArray(stored.examHistory) ? stored.examHistory : [];
+    const dppHistory = Array.isArray(stored.dpp_history) ? [...stored.dpp_history] : [];
     let found = false;
     const updated = history.map(item => {
       if (item?.sessionId !== state.sessionId) return item;
       found = true; return { ...item, conceptReview: session.conceptReview };
     });
+    const updatedDpp = dppHistory.map(item => {
+      if (String(item?.sessionId || item?.id) !== state.sessionId) return item;
+      found = true; return { ...item, conceptReview: session.conceptReview };
+    });
     if (!found) updated.unshift({ ...session });
     const payload = { examHistory: updated };
+    if (dppHistory.length) payload.dpp_history = updatedDpp;
     if (stored.lastReport?.sessionId === state.sessionId) payload.lastReport = { ...stored.lastReport, conceptReview: session.conceptReview };
     await chrome.storage.local.set(payload);
+    const conceptQualified = status === 'Completed' && elapsed >= 60_000 && elapsed <= 270_000;
+    chrome.runtime.sendMessage({ type: 'RECORD_CONCEPT_REVIEW', sessionId: state.sessionId, questionId: qid,
+      reviewId: `dpp:${state.sessionId}:${qid}:${at}`, dwellMs: elapsed, isConceptReview: true,
+      conceptQualified, timestamp: at }, () => { void chrome.runtime.lastError; });
   }
 
   async function conceptReviewNext(status) {
@@ -1928,7 +1951,7 @@
       const durationMs = Math.max(0, endedAt - state.startedAtMs);
       const total = state.examConfig.totalQuestions;
 
-      // Build Questions & Outcomes maps matching Exam Arena schema
+      // Build Questions & Outcomes maps matching Study Slash schema
       const questions = {};
       const outcomes = {};
       const completedQuestionIds = [];

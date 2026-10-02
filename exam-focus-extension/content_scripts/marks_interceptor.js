@@ -50,6 +50,9 @@
   let reattemptActive = false;
   let reattemptSessionId = null;
   let reattemptQuestionId = null;
+  let reattemptTarget = null;
+  let activeReattemptIntent = null;
+  let reattemptInitPromise = null;
   let reattemptStartedAt = 0;
   let reattemptElapsedMs = 0;
   let reattemptTickTimer = 0;
@@ -61,6 +64,12 @@
   let conceptReviewStartedAt = 0;
   let conceptReviewInterval = 0;
   let conceptReviewKey = "";
+  const CONCEPT_MIN_DWELL_MS = 60 * 1000;
+  const CONCEPT_MAX_DWELL_MS = 270 * 1000;
+
+  function evaluateConceptReviewDwell(dwellMs) {
+    return Number(dwellMs) >= CONCEPT_MIN_DWELL_MS && Number(dwellMs) <= CONCEPT_MAX_DWELL_MS;
+  }
   let conceptObserver = null;
   let activeConceptSessionId = null;
   let activeQuestionKey = null;
@@ -73,7 +82,11 @@
   let isOrphaned = false;
 
   function isExtensionValid() {
-    return typeof chrome !== "undefined" && Boolean(chrome.runtime?.id);
+    try {
+      return Boolean(typeof chrome !== "undefined" && chrome?.runtime && chrome.runtime?.id);
+    } catch (_) {
+      return false;
+    }
   }
 
   const bodyReadyCallbacks = [];
@@ -97,25 +110,44 @@
     document.addEventListener("DOMContentLoaded", flushBodyReadyCallbacks, { once: true });
     bodyReadyPoll = setInterval(flushBodyReadyCallbacks, 20);
   }
-  function safeMount(element) {
+  function ensureBodyReady() {
+    if (document.body) return Promise.resolve(document.body);
+    return new Promise((resolve) => whenBodyReady(() => resolve(document.body)));
+  }
+  function safeAppendToHead(element) {
+    if (!element) return;
+    const target = document.head || document.documentElement;
+    if (target) {
+      if (!element.isConnected) target.appendChild(element);
+      return;
+    }
+    const appendWhenReady = () => {
+      const fallbackTarget = document.head || document.documentElement;
+      if (fallbackTarget && !element.isConnected) fallbackTarget.appendChild(element);
+    };
+    document.addEventListener("readystatechange", appendWhenReady);
+  }
+  function safeAppendToBody(element) {
     if (!element) return;
     const existing = element.id ? document.getElementById(element.id) : null;
     if (existing && existing !== element) existing.remove();
     if (document.body) {
-      document.body.append(element);
-    } else if (document.documentElement) {
-      document.documentElement.append(element);
-      document.addEventListener("DOMContentLoaded", () => {
-        if (document.body && element.isConnected && element.parentElement !== document.body) document.body.append(element);
-      }, { once: true });
+      if (!element.isConnected || element.parentElement !== document.body) document.body.appendChild(element);
     } else {
-      whenBodyReady(() => document.body?.append(element));
+      whenBodyReady(() => {
+        if (document.body && !element.isConnected) document.body.appendChild(element);
+      });
     }
   }
+  const safeMount = safeAppendToBody;
 
   function teardownOrphanedScript() {
     if (isOrphaned) return;
     isOrphaned = true;
+    active = false;
+    completed = true;
+    reattemptActive = false;
+    conceptReviewStartedAt = 0;
     if (bodyReadyPoll) clearInterval(bodyReadyPoll);
     bodyReadyPoll = 0; bodyReadyPending = false; bodyReadyCallbacks.length = 0;
 
@@ -163,8 +195,17 @@
 
     // Disconnect observers
     try { observer?.disconnect(); } catch (_) {}
+    try { launcherObserver?.disconnect(); } catch (_) {}
+    launcherObserver = null;
+    observerRoot = null;
     try { solutionWaitObserver?.disconnect(); } catch (_) {}
     try { conceptObserver?.disconnect(); } catch (_) {}
+    solutionWaitObserver = null;
+    conceptObserver = null;
+    scanQueued = false;
+    scanAgain = false;
+    transitionCandidate = null;
+    transitionReadyId = null;
 
     // Remove injected floating HUD and modals to prevent further user actions on dead context
     try {
@@ -175,8 +216,21 @@
       document.getElementById(REATTEMPT_CONFIRM_ID)?.remove();
       document.getElementById(REATTEMPT_TOAST_ID)?.remove();
       document.getElementById("ea-concept-answer-prompt")?.remove();
+      document.getElementById("ea-marks-hover-tile")?.remove();
+      document.getElementById("ea-marks-setup-modal")?.remove();
     } catch (_) {}
   }
+
+  // An already orphaned tab can still have a pending async callback from the
+  // previous extension instance. Silence only the known context-loss failures.
+  window.addEventListener("unhandledrejection", (event) => {
+    const reason = event.reason;
+    const message = typeof reason === "string" ? reason : reason?.message || String(reason || "");
+    if (/extension context invalidated|receiving end does not exist|invoked a callback on a discarded/i.test(message)) {
+      event.preventDefault();
+      teardownOrphanedScript();
+    }
+  });
 
   // Only explicit solution nodes and result banners may receive the broad mask class.
   const solutionSelector = ".question-solution, [class*='question-solution']";
@@ -187,31 +241,31 @@
   function send(payload) {
     if (!isExtensionValid()) {
       teardownOrphanedScript();
-      return Promise.reject(new Error("Extension context invalidated"));
+      return Promise.resolve({ ok: false, error: "Extension context invalidated", orphaned: true });
     }
 
     const message = typeof payload === "string" ? { type: payload } : payload;
 
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       try {
         chrome.runtime.sendMessage(message, (response) => {
           const error = chrome.runtime.lastError;
           if (error) {
-            if (/context invalidated|invoked a callback on a discarded/i.test(error.message)) {
+            const errorMessage = error.message || "Message delivery failed";
+            if (/context invalidated|invoked a callback on a discarded|receiving end does not exist/i.test(errorMessage)) {
               teardownOrphanedScript();
             }
-            reject(error);
-          } else if (response?.ok === false) {
-            reject(new Error(response.error || "Request failed"));
-          } else {
-            resolve(response);
+            resolve({ ok: false, error: errorMessage, ...(isOrphaned ? { orphaned: true } : {}) });
+            return;
           }
+          resolve(response || { ok: true });
         });
       } catch (err) {
-        if (/context invalidated/i.test(err.message)) {
+        const errorMessage = err?.message || "Send failed";
+        if (/context invalidated|receiving end does not exist/i.test(errorMessage)) {
           teardownOrphanedScript();
         }
-        reject(err);
+        resolve({ ok: false, error: errorMessage, orphaned: isOrphaned });
       }
     });
   }
@@ -353,7 +407,7 @@
       <div class="ea-submit-summary"><div><span>Approached</span><strong class="ea-submit-approached">0</strong></div><div><span>Solved / Attempted</span><strong class="ea-submit-attempted">0</strong></div><div><span>Skipped</span><strong class="ea-submit-skipped">0</strong></div></div>
       <div class="ea-submit-actions"><button class="ea-submit-cancel" type="button">Cancel / Return</button><button class="ea-submit-confirm" type="button">Confirm &amp; Submit</button></div>
     </section>`;
-    document.body.appendChild(submitConfirmModal);
+    safeAppendToBody(submitConfirmModal);
     const questions = session.questions || {};
     const ids = Object.keys(questions);
     const attempted = ids.filter((id) => {
@@ -415,7 +469,7 @@
   }
   function sessionTimestamp(value) {
     if (Number(value?.startedAtMs) > 0) return Number(value.startedAtMs);
-    const raw = value?.startedAt;
+    const raw = value?.startedAt || value?.startTime || value?.date || value?.timestamp;
     if (typeof raw === "number") return raw;
     if (typeof raw === "string" && /^\d{10,13}$/.test(raw)) return Number(raw);
     return Date.parse(raw) || 0;
@@ -568,10 +622,21 @@
     }
     inlineStyleSnapshots.clear();
   }
+  function clearCustomOptionHighlights(container) {
+    const root = container || document;
+    for (const card of root.querySelectorAll?.('.question-options__option, [class*="question-options__option"]') || []) {
+      card.classList.remove("examfocus-selected-option");
+      restoreInlineProperties(card, ["border-color", "background-color", "box-shadow", "outline"]);
+    }
+  }
   function neutralizeOptionCards(root) {
     if (!active) return;
     for (const card of matchingNodes(root, '.question-options__option, [class*="question-options__option"]')) {
-      const isSelected = isOptionCardSelected(card);
+      const group = card.closest(".question-options") || card.parentElement;
+      const isMulti = group?.dataset?.type === "multipleCorrect" || Boolean(group?.querySelector("[data-type='multipleCorrect']"));
+      const selectedCard = selectedOption instanceof Element
+        ? selectedOption.closest('.question-options__option, [class*="question-options__option"]') : null;
+      const isSelected = !isMulti && selectedCard ? selectedCard === card : isOptionCardSelected(card);
       if (isSelected) {
         card.classList.add("examfocus-selected-option");
         setInlineImportant(card, "border-color", "#3b82f6");
@@ -614,9 +679,7 @@
     const card = option?.closest?.('.question-options__option, [class*="question-options__option"]');
     if (!card) return;
     const group = card.closest(".question-options") || card.parentElement || document;
-    group.querySelectorAll(".examfocus-selected-option").forEach((el) => {
-      if (el !== card) el.classList.remove("examfocus-selected-option");
-    });
+    clearCustomOptionHighlights(group);
     card.classList.add("examfocus-selected-option");
     // Inline important styles give immediate feedback before the observer runs.
     setInlineImportant(card, "border-color", "#3b82f6");
@@ -657,7 +720,7 @@
     selectedOption = null; currentOutcome = null; answerSubmitted = false; questionInteracted = false;
     session.outcomes ||= {}; delete session.outcomes[questionId];
     const question = session.questions?.[questionId];
-    if (question) { delete question.outcome; question.userSelected = false; question.lastInteractedAt = Date.now(); }
+    if (question) { delete question.outcome; question.userChoice = null; question.userSelected = false; question.lastInteractedAt = Date.now(); }
     session.completedQuestionIds = (session.completedQuestionIds || []).filter((id) => id !== questionId);
     const response = await recordQuestion(questionId, 0, undefined, {
       clearOutcome: true, userSelected: false, lastInteractedAt: question?.lastInteractedAt || Date.now()
@@ -843,6 +906,28 @@
     return null;
   }
   function detectOutcome(roots) {
+    // Marks exposes authoritative result attributes on its status banner and
+    // numerical answer container. Check these before any visual heuristics.
+    const topStatus = document.querySelector("[data-status='correct'], [data-status='incorrect']");
+    if (topStatus?.getAttribute("data-status") === "correct") return "Right";
+    if (topStatus?.getAttribute("data-status") === "incorrect") return "Wrong";
+    const numericStatus = document.querySelector(".question-options__option_numeric[data-status='true'], .question-options__option_numeric[data-status='false']");
+    if (numericStatus?.getAttribute("data-status") === "true") return "Right";
+    if (numericStatus?.getAttribute("data-status") === "false") return "Wrong";
+    for (const card of document.querySelectorAll(".question-options__option")) {
+      const text = card.textContent || "";
+      if (!/you\s+marked/i.test(text)) continue;
+      const label = card.querySelector(".question-options__option__label");
+      const clues = `${label?.className || ""} ${card.outerHTML || ""}`;
+      if (/incorrect|--m5-danger-base/i.test(clues)) return "Wrong";
+      if (/correct|--m5-success-base/i.test(clues)) return "Right";
+    }
+    const feedback = document.querySelectorAll(".Toastify, [class*='toast' i], div[class*='fixed']");
+    for (const el of feedback) {
+      const text = (el.textContent || "").toLowerCase();
+      if (text.includes("your answer is correct")) return "Right";
+      if (text.includes("your answer is wrong")) return "Wrong";
+    }
     // Explicit result copy is the most specific evidence, especially when both colors appear.
     for (const root of roots) {
       for (const banner of matchingNodes(root, "div, section")) {
@@ -875,23 +960,67 @@
     }
     return null;
   }
+  function inspectMarksOutcome() {
+    if (!active || !currentId) return null;
+    const numericContainer = document.querySelector(".question-options__option_numeric");
+    if (numericContainer && !selectedOption) {
+      const text = (numericContainer.innerText || numericContainer.textContent || "").replace(/you\s*marked/ig, "").trim();
+      const match = text.match(/-?\d+(?:\.\d+)?/);
+      if (match) selectedOption = match[0];
+    }
+    const outcome = detectOutcome([getQuestionContentRoot()]);
+    if (outcome !== "Right" && outcome !== "Wrong") return null;
+    currentOutcome = outcome;
+    const question = session.questions?.[currentId] || (session.questions[currentId] = { timeMs: 0, visits: 0, label: currentLabel });
+    question.outcome = outcome;
+    question.userChoice = selectedOption ?? question.userChoice ?? null;
+    question.userSelected = true;
+    session.outcomes ||= {};
+    session.outcomes[currentId] = outcome;
+    session.completedQuestionIds ||= [];
+    if (!session.completedQuestionIds.includes(currentId)) session.completedQuestionIds.push(currentId);
+    void recordQuestion(currentId, questionDwellMs, outcome, {
+      userChoice: question.userChoice,
+      userSelected: true,
+      questionType: question.questionType || (numericContainer ? "numerical" : undefined),
+      completed: true
+    }, currentUrl);
+    updateHud();
+    renderPaletteGrid();
+    return outcome;
+  }
   function handleOptionClick(event) {
     if (!active || completed || !currentId || !(event.target instanceof Element) ||
         event.target.closest(`#${HUD_ID}, #examarena-palette-modal, #examarena-submit-confirm-modal, #examfocus-completion-modal`)) return;
     const option = event.target.closest('[data-option], [role="radio"], input[type="radio"], [class*="question-option" i], [class*="question-options" i] button');
     const card = option?.closest?.('.question-options__option, [class*="question-options__option"]');
     if (option && card) {
+      const container = card.closest(".question-options") || card.parentElement;
+      const cards = Array.from(container?.querySelectorAll(".question-options__option") || []);
+      const idx = cards.indexOf(card);
+      const letters = ["A", "B", "C", "D"];
+      const choice = option.getAttribute("data-option") || card.querySelector(".question-options__option__label")?.textContent?.trim() || letters[idx] || String(idx + 1);
+      const isMulti = container?.dataset?.type === "multipleCorrect" || Boolean(container?.querySelector("[data-type='multipleCorrect']"));
       const questionId = currentId;
       const wasSelected = isOptionCardSelected(card);
       const interactedAt = Date.now();
-      questionInteracted = true; answerSubmitted = true;
+      questionInteracted = true;
       const question = session.questions?.[questionId] || (session.questions[questionId] = { timeMs: 0, visits: 0, label: currentLabel });
       question.lastInteractedAt = interactedAt;
       if (wasSelected) {
+        if (isMulti) {
+          const current = String(question.userChoice || "").split(",").map((s) => s.trim()).filter(Boolean);
+          question.userChoice = current.filter((value) => value !== choice).sort().join(", ");
+          question.userSelected = question.userChoice.length > 0;
+          void recordQuestion(questionId, 0, undefined, { userSelected: question.userSelected, userChoice: question.userChoice, questionType: "multipleCorrect", lastInteractedAt: interactedAt }, currentUrl);
+        }
         queueMicrotask(() => { void persistDeselection(questionId, card, option); });
       } else {
-        selectedOption = option; question.userSelected = true; setSelectedOption(option);
-        void recordQuestion(questionId, 0, undefined, { userSelected: true, lastInteractedAt: interactedAt }, currentUrl);
+        selectedOption = option; question.userSelected = true;
+        question.userChoice = isMulti ? [ ...(String(question.userChoice || "").split(",").map((s) => s.trim()).filter(Boolean)), choice ].filter((v, i, a) => a.indexOf(v) === i).sort().join(", ") : choice;
+        question.questionType = isMulti ? "multipleCorrect" : "singleCorrect";
+        setSelectedOption(option);
+        void recordQuestion(questionId, 0, undefined, { userSelected: true, userChoice: question.userChoice, questionType: question.questionType, lastInteractedAt: interactedAt }, currentUrl);
         queueMicrotask(() => {
           if (currentId !== questionId) return;
           const result = detectOutcome([getQuestionContentRoot()]);
@@ -899,7 +1028,7 @@
             currentOutcome = result; session.outcomes ||= {}; session.outcomes[questionId] = result;
             session.completedQuestionIds ||= [];
             if (!session.completedQuestionIds.includes(questionId)) session.completedQuestionIds.push(questionId);
-            void recordQuestion(questionId, 0, result, { completed: true, userSelected: true, lastInteractedAt: interactedAt }, currentUrl);
+            void recordQuestion(questionId, 0, result, { completed: true, userSelected: true, userChoice: question.userChoice, questionType: question.questionType, lastInteractedAt: interactedAt }, currentUrl);
             paintReviewButton(); renderPaletteGrid();
           }
           queueScan();
@@ -911,10 +1040,44 @@
     if (!option && !submitText) return;
     if (Date.now() < sessionStartedAt) return;
     questionInteracted = true;
-    if (submitText) answerSubmitted = true;
+    if (submitText) {
+      const numericInput = document.querySelector("input.question-options__input, .question-options input[type='number']");
+      if (numericInput) captureNumericalInput(numericInput);
+      answerSubmitted = true;
+      [200, 600, 1200].forEach((delay) => setTimeout(() => {
+        if (active && currentId) { inspectMarksOutcome(); queueScan(); }
+      }, delay));
+    }
     // A selection or submit click is not a final outcome. Unresolved visits remain Unattempted.
   }
+  function captureNumericalInput(target) {
+    if (!active || completed || !currentId || !(target instanceof HTMLInputElement)) return;
+    if (!target.matches("input.question-options__input, .question-options input, input[type='number']")) return;
+    if (target.closest(`#${HUD_ID}, #examarena-palette-modal, #examarena-submit-confirm-modal`)) return;
+    const value = target.value.trim();
+    if (!value) return;
+    const question = session.questions?.[currentId] || (session.questions[currentId] = { timeMs: 0, visits: 0, label: currentLabel });
+    if (question.questionType === "numerical" && question.userChoice === value && selectedOption === value) return;
+    selectedOption = value;
+    questionInteracted = true;
+    question.userSelected = true;
+    question.userChoice = value;
+    question.questionType = "numerical";
+    question.lastInteractedAt = Date.now();
+    void recordQuestion(currentId, 0, undefined, { userSelected: true, userChoice: value, questionType: "numerical", lastInteractedAt: question.lastInteractedAt }, currentUrl);
+    updateHud();
+    renderPaletteGrid();
+  }
+  function handleMarksAnswerInput(event) { captureNumericalInput(event.target); }
   function handleNextClick(event) {
+    if (reattemptActive && event.target instanceof Element) {
+      const healAction = event.target.closest("button, a, [role='button'], input[type='button'], input[type='submit']");
+      if (healAction && (healAction.dataset.eaReattemptNext === "true" || /^(?:next|next question)$/i.test((healAction.innerText || healAction.textContent || "").trim()))) {
+        event.preventDefault(); event.stopPropagation(); event.stopImmediatePropagation();
+        openReattemptConfirmation(); return;
+      }
+      return;
+    }
     if (!active || completed || replayingNativeNavigation || !(event.target instanceof Element) ||
         event.target.closest(`#${HUD_ID}, #examarena-palette-modal, #examarena-submit-confirm-modal, #examfocus-completion-modal`)) return;
     const action = event.target.closest("button, a, [role='button'], input[type='button'], input[type='submit']");
@@ -933,7 +1096,7 @@
     }
     // Preserve the final-question confirmation, but keep ordinary host navigation
     // on the original click path. The background queue serializes this snapshot.
-    void snapshotCurrentQuestion()?.catch((error) => console.warn("Exam Arena could not save the outgoing question", error));
+    void snapshotCurrentQuestion()?.catch((error) => console.warn("Study Slash could not save the outgoing question", error));
   }
   function maskResultBanner(roots) {
     if (!active || isMutating || !roots.length) return;
@@ -978,11 +1141,70 @@
     });
   }
   function questionOptionsVisible() {
-    const optionArea = [...document.querySelectorAll(".question-options, [class*='question-options']")]
-      .some((el) => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== "hidden");
+    const isVisible = (el) => {
+      const style = getComputedStyle(el);
+      return el.getClientRects().length > 0 && style.display !== "none" && style.visibility !== "hidden";
+    };
+    const optionArea = [...document.querySelectorAll(
+      ".question-options__option, [class*='question-options__option']"
+    )].some(isVisible);
     if (optionArea) return true;
-    return [...document.querySelectorAll("[data-option], [role='radio'], input[type='radio']")]
-      .some((el) => (el.getClientRects().length > 0 || el.closest(".question-options, [class*='question-options']")?.getClientRects().length > 0) && getComputedStyle(el).visibility !== "hidden");
+    return [...document.querySelectorAll(
+      "input.question-options__input, .question-options input, input[type='number'], [data-option], [role='radio'], input[type='radio']"
+    )].some(isVisible);
+  }
+  function waitForMarksQuestionReady(timeoutMs = 8000) {
+    return new Promise((resolve) => {
+      const startedAt = Date.now();
+      const check = () => {
+        if (questionOptionsVisible()) return resolve(true);
+        if (Date.now() - startedAt >= timeoutMs) return resolve(false);
+        setTimeout(check, 200);
+      };
+      check();
+    });
+  }
+  async function checkAndInitReattemptMode() {
+    if (!isExtensionValid() || reattemptActive || reattemptInitPromise) return;
+    reattemptInitPromise = (async () => {
+      let storedTarget = null;
+      try {
+        const data = await new Promise((resolve) => chrome.storage.local.get("ea_reattempt_target", resolve));
+        storedTarget = data?.ea_reattempt_target || null;
+      } catch (_) { return; }
+
+      const hashParams = new URLSearchParams(window.location.hash.slice(1));
+      const hasHashIntent = hashParams.get("ea-intent") === "reattempt";
+      const currentPath = window.location.pathname.replace(/\/$/, "");
+      let matchesTarget = false;
+      if (storedTarget) {
+        try {
+          const targetUrl = storedTarget.url || storedTarget.targetUrl;
+          if (targetUrl) matchesTarget = new URL(targetUrl, window.location.href).pathname.replace(/\/$/, "") === currentPath;
+        } catch (_) { /* Fall back to the question ID path check. */ }
+        const qid = String(storedTarget.questionId || "");
+        if (!matchesTarget && qid) matchesTarget = currentPath.split("/").filter(Boolean).pop() === qid;
+      }
+      if (!hasHashIntent && !matchesTarget) return;
+
+      const pathQuestionId = currentPath.split("/").filter(Boolean).pop() || "";
+      const qid = hashParams.get("ea-qid") || storedTarget?.questionId || pathQuestionId;
+      const sessionId = hashParams.get("ea-session") || storedTarget?.sessionId || "";
+      if (!qid) return;
+      reattemptTarget = storedTarget || { questionId: qid, sessionId };
+      reattemptSessionId = sessionId;
+      reattemptQuestionId = qid;
+      activeReattemptIntent = new URLSearchParams({
+        "ea-intent": "reattempt", "ea-session": sessionId, "ea-qid": qid
+      });
+
+      if (!document.body) await new Promise((resolve) => whenBodyReady(resolve));
+      const ready = await waitForMarksQuestionReady(8000);
+      if (!ready) console.warn("[Study Slash] Marks question controls have not rendered yet; re-attempt activation will continue waiting.");
+      if (!isExtensionValid()) return;
+      maybeOpenSolutionFromHash();
+    })().finally(() => { reattemptInitPromise = null; });
+    return reattemptInitPromise;
   }
   function solutionViewVisible() {
     const strongSolution = [...document.querySelectorAll(".question-solution, #question-solution-title, [class*='question-solution'], [class*='solution-container'], [class*='Explanation'], [class*='explanation']")]
@@ -1038,6 +1260,7 @@
       if (!conceptReviewStartedAt) return;
       clearInterval(conceptReviewInterval); conceptReviewInterval=0;
       const elapsed=Math.max(0,Date.now()-conceptReviewStartedAt), at=Date.now(); conceptReviewStartedAt=0;
+      const conceptQualified = status === "Completed" && evaluateConceptReviewDwell(elapsed);
       const stored=await chrome.storage.local.get("examHistory"), history=Array.isArray(stored.examHistory)?stored.examHistory:[];
       const identity=s=>String(s.sessionId || (typeof s.startedAt === "number" ? s.startedAt : (/^\d{10,13}$/.test(String(s.startedAt||"")) ? s.startedAt : (Date.parse(s.startedAt)||0))));
       const updated=history.map(s=>{
@@ -1048,6 +1271,10 @@
         return {...s,conceptReview};
       });
       await chrome.storage.local.set({examHistory:updated});
+      const reviewId = `${sessionId}:${qid}:${at}`;
+      await send({ type: "RECORD_CONCEPT_REVIEW", sessionId, questionId: String(qid), reviewId,
+        dwellMs: elapsed, isConceptReview: true, conceptQualified, timestamp: at });
+      console.info(`[Study Slash] Concept review ${conceptQualified ? "qualified" : "unrewarded"} (${Math.round(elapsed / 1000)}s).`);
     };
     hud.querySelectorAll("[data-review-status]").forEach(btn=>btn.onclick=async()=>{
       const status=btn.dataset.reviewStatus; await record(status);
@@ -1191,7 +1418,7 @@
     if (!toast) {
       toast = document.createElement("div");
       toast.id = REATTEMPT_TOAST_ID;
-      document.body.appendChild(toast);
+      safeAppendToBody(toast);
     }
     toast.className = `ea-reattempt-toast ${isError ? "toast-warning" : "toast-success"}`;
     toast.textContent = message;
@@ -1211,6 +1438,7 @@
     reattemptSelectedOption = null;
 
     renderReattemptHud();
+    overrideReattemptNextButton();
     if (reattemptTickTimer) clearInterval(reattemptTickTimer);
     reattemptTickTimer = setInterval(tickReattempt, 1000);
   }
@@ -1224,7 +1452,7 @@
       <div class="ea-reattempt-head">
         <div class="ea-reattempt-badge">
           <span class="ea-pulse-dot"></span>
-          <strong>REATTEMPT MODE</strong>
+          <strong>⚡ HEALING MODE</strong>
         </div>
         <button type="button" class="ea-reattempt-close" title="Exit Reattempt">✕</button>
       </div>
@@ -1237,10 +1465,10 @@
           <span class="ea-reattempt-sel-label">Selected:</span>
           <strong class="ea-reattempt-sel-val">None</strong>
         </div>
-        <button type="button" class="ea-reattempt-submit-btn">Submit Reattempt</button>
+        <button type="button" class="ea-reattempt-submit-btn">Submit Re-attempt</button>
       </div>
     `;
-    document.body.appendChild(hud);
+    safeAppendToBody(hud);
 
     hud.querySelector(".ea-reattempt-close")?.addEventListener("click", () => {
       if (confirm("Exit Reattempt Mode? Your timing and answer will not be saved.")) {
@@ -1259,10 +1487,31 @@
       return;
     }
     if (!reattemptActive) return;
+    overrideReattemptNextButton();
     reattemptElapsedMs = Math.max(0, Date.now() - reattemptStartedAt);
     const timer = document.querySelector(`#${REATTEMPT_HUD_ID} .ea-reattempt-timer`);
     if (timer) {
       timer.textContent = formatDuration(reattemptElapsedMs, false);
+    }
+  }
+
+  function overrideReattemptNextButton() {
+    if (!reattemptActive) return;
+    for (const button of document.querySelectorAll("button, [role='button']")) {
+      if (button.closest(`#${REATTEMPT_HUD_ID}, #${REATTEMPT_CONFIRM_ID}`)) continue;
+      const label = (button.innerText || button.textContent || "").trim();
+      if (!/^(?:next|next question)$/i.test(label)) continue;
+      if (!button.dataset.eaReattemptOriginalHtml) {
+        button.dataset.eaReattemptOriginalHtml = button.innerHTML;
+        for (const property of ["background", "color", "font-weight"]) {
+          button.dataset[`eaReattemptOriginal${property.replace(/[^a-z]/gi, "")}`] = JSON.stringify({ value: button.style.getPropertyValue(property), priority: button.style.getPropertyPriority(property) });
+        }
+      }
+      button.dataset.eaReattemptNext = "true";
+      button.textContent = "Submit Re-attempt";
+      button.style.setProperty("background", "#14b8a6", "important");
+      button.style.setProperty("color", "#020817", "important");
+      button.style.setProperty("font-weight", "800", "important");
     }
   }
 
@@ -1285,18 +1534,15 @@
             <strong class="ea-submit-clock">${formatDuration(reattemptElapsedMs, false)}</strong>
           </div>
         </div>
-        <p class="ea-submit-copy">
-          ${hasSelected
-            ? `You have selected <strong>${selectedLabel}</strong>. Confirming will evaluate your answer, log it in your session reattempt ledger, and heal your cultivation wound if correct.`
-            : `⚠️ <strong>No option selected.</strong> If you confirm, this reattempt will be submitted as unattempted.`}
-        </p>
+        <p class="ea-submit-copy"></p>
         <div class="ea-submit-actions">
           <button class="ea-submit-cancel" type="button">Cancel / Return</button>
           <button class="ea-submit-confirm" type="button">Confirm &amp; Submit</button>
         </div>
       </section>
     `;
-    document.body.appendChild(reattemptConfirmModal);
+    safeAppendToBody(reattemptConfirmModal);
+    reattemptConfirmModal.querySelector(".ea-submit-copy").textContent = `Are you sure you want to submit your re-attempt?${hasSelected ? ` Selected: ${selectedLabel}.` : " No option selected."}`;
 
     reattemptConfirmModal.querySelector(".ea-submit-cancel")?.addEventListener("click", () => {
       reattemptConfirmModal?.remove();
@@ -1343,13 +1589,13 @@
           reattemptSelectedOption.querySelector?.("[data-status]")?.getAttribute("data-status");
         if (statusAttr === "true") outcome = "Right";
         else if (statusAttr === "false") outcome = "Wrong";
-        else {
-          const classes = `${reattemptSelectedOption.className || ""} ${reattemptSelectedOption.outerHTML.slice(0, 500)}`;
-          if (/green|success|correct/i.test(classes)) outcome = "Right";
-          else if (/red|danger|incorrect/i.test(classes)) outcome = "Wrong";
-          else outcome = "Right";
-        }
       }
+    }
+
+    if (!outcome && reattemptSelectedOption) {
+      reattemptConfirmModal?.remove(); reattemptConfirmModal = null;
+      showLockoutToast("Marks did not expose an answer result, so the wound was left unchanged.");
+      return;
     }
 
     reattemptConfirmModal?.remove();
@@ -1365,9 +1611,10 @@
         outcome: outcome || "Wrong",
         timestamp: Date.now()
       });
+      if (!res?.ok) throw new Error(res?.error || "The original question history could not be updated.");
 
       if (outcome === "Right") {
-        showLockoutToast("✨ Reattempt Solved! Cultivation wound healed, +4 marks & +10 XP refunded.", false);
+        showLockoutToast("🌿 WOUND HEALED! The question archive and cultivation debt are updated.", false);
       } else if (outcome === "Wrong") {
         showLockoutToast("Reattempt submitted: Incorrect attempt recorded.", true);
       } else {
@@ -1380,6 +1627,7 @@
       }
       showLockoutToast(`Could not record reattempt: ${err?.message || "Unknown error"}`, true);
     } finally {
+      chrome.storage.local.remove("ea_reattempt_target").catch(() => {});
       stopReattemptMode();
     }
   }
@@ -1391,6 +1639,18 @@
     reattemptStartedAt = 0;
     reattemptElapsedMs = 0;
     reattemptSelectedOption = null;
+    document.querySelectorAll("[data-ea-reattempt-next='true']").forEach(button => {
+      if (button.dataset.eaReattemptOriginalHtml != null) button.innerHTML = button.dataset.eaReattemptOriginalHtml;
+      for (const [property, key] of [["background", "eaReattemptOriginalbackground"], ["color", "eaReattemptOriginalcolor"], ["font-weight", "eaReattemptOriginalfontweight"]]) {
+        let original = null;
+        try { original = JSON.parse(button.dataset[key] || "null"); } catch { /* Ignore malformed page data. */ }
+        if (original?.value) button.style.setProperty(property, original.value, original.priority || "");
+        else button.style.removeProperty(property);
+        delete button.dataset[key];
+      }
+      delete button.dataset.eaReattemptOriginalHtml;
+      delete button.dataset.eaReattemptNext;
+    });
     document.getElementById(REATTEMPT_HUD_ID)?.remove();
     document.getElementById(REATTEMPT_CONFIRM_ID)?.remove();
     clearIntentHash();
@@ -1399,7 +1659,7 @@
   function resolveQuestionIntent() {
     if (active) return false;
     const hashParams = new URLSearchParams(window.location.hash.slice(1));
-    const params = hashParams.get("ea-intent") ? hashParams : (activeConceptIntent || hashParams);
+    const params = hashParams.get("ea-intent") ? hashParams : (activeReattemptIntent || activeConceptIntent || hashParams);
     const intent = params.get("ea-intent");
     if (!/^(reattempt|solution)$/.test(intent || "")) { stopSolutionHashWait(); return false; }
 
@@ -1414,40 +1674,18 @@
       const targetQid = params.get("ea-qid");
       const solutionVisible = solutionViewVisible();
 
-      if (solutionVisible) {
+      if (solutionVisible && !questionOptionsVisible()) {
         const backButton = intentButtons(/(?:show\s+question|back\s+to\s+question|hide\s+solution|reattempt|try\s+again|clear\s+response)/i)[0];
         if (backButton && !backButton.dataset.eaIntentClicked) {
           backButton.dataset.eaIntentClicked = "true";
           backButton.click();
         }
-        reattemptLockoutAttempts += 1;
-        if (reattemptLockoutAttempts >= 18) {
-          showLockoutToast("Host Lockout: Marks has locked this question into solution mode. Interactive reattempt is blocked.");
-          lockoutCooldown = true;
-          if (lockoutCooldownTimer) clearTimeout(lockoutCooldownTimer);
-          lockoutCooldownTimer = setTimeout(() => { lockoutCooldown = false; }, 8000);
-          clearIntentHash();
-          stopSolutionHashWait();
-          reattemptLockoutAttempts = 0;
-          return true;
-        }
+        // Marks can briefly render the solution shell before the answer controls.
+        // Keep waiting; a disabled Check Answer button is not evidence of lockout.
         return false;
       }
 
-      if (!questionOptionsVisible()) {
-        reattemptLockoutAttempts += 1;
-        if (reattemptLockoutAttempts >= 18) {
-          showLockoutToast("Host Lockout: Question input is unavailable or locked by Marks.");
-          lockoutCooldown = true;
-          if (lockoutCooldownTimer) clearTimeout(lockoutCooldownTimer);
-          lockoutCooldownTimer = setTimeout(() => { lockoutCooldown = false; }, 8000);
-          clearIntentHash();
-          stopSolutionHashWait();
-          reattemptLockoutAttempts = 0;
-          return true;
-        }
-        return false;
-      }
+      if (!questionOptionsVisible()) return false;
 
       reattemptLockoutAttempts = 0;
       clearQuestionAnswerState();
@@ -1458,6 +1696,7 @@
       clearIntentHash();
       stopSolutionHashWait();
       startReattemptMode(targetSession, targetQid);
+      activeReattemptIntent = null;
       return true;
     }
 
@@ -1480,7 +1719,7 @@
     const hashParams = new URLSearchParams(window.location.hash.slice(1));
     const hashIntent = hashParams.get("ea-intent");
     if (hashIntent === "solution") activeConceptIntent = hashParams;
-    if (active || (!hashIntent && !activeConceptIntent)) return;
+    if (active || (!hashIntent && !activeReattemptIntent && !activeConceptIntent)) return;
     stopSolutionHashWait();
     if (resolveQuestionIntent()) return;
     conceptObserver = new MutationObserver(() => {
@@ -1557,8 +1796,9 @@
   }
   function questionTileStatus(id) {
     const outcome = id ? outcomeForQuestion(id) : null;
-    if (outcome) return "answered";
     if (id && isMarkedForReview(id)) return "review";
+    const question = id ? session.questions?.[id] : null;
+    if (outcome || question?.userSelected || (id === currentId && answerSubmitted)) return "answered";
     return "unattempted";
   }
   function findNativeQuestionControl(id, relativeNumber, question) {
@@ -1718,7 +1958,7 @@
     }
     const message = paletteModal?.querySelector(".ea-palette-message");
     if (message) message.textContent = `Moving to Question ${relativeNumber}…`;
-    void snapshotCurrentQuestion()?.catch((error) => console.warn("Exam Arena could not save the outgoing question", error));
+    void snapshotCurrentQuestion()?.catch((error) => console.warn("Study Slash could not save the outgoing question", error));
     if (!active) return false;
     if (id === currentId) { pendingJump = null; removePalette(); return true; }
     pendingJump = { id, relativeNumber };
@@ -1790,12 +2030,12 @@
     session = stored.examSession || session;
     paletteModal = document.createElement("div"); paletteModal.id = "examarena-palette-modal";
     paletteModal.innerHTML = `<section role="dialog" aria-modal="true" aria-labelledby="ea-palette-title">
-      <header class="ea-palette-header"><div><span class="ea-palette-eyebrow">EXAM ARENA · STATUS</span><h2 id="ea-palette-title">Question Palette</h2></div><div class="ea-palette-header-actions"><button class="ea-palette-submit" type="button">Submit Exam</button><button class="ea-palette-close" type="button" aria-label="Close question palette">×</button></div></header>
+      <header class="ea-palette-header"><div><span class="ea-palette-eyebrow">STUDY SLASH · STATUS</span><h2 id="ea-palette-title">Question Palette</h2></div><div class="ea-palette-header-actions"><button class="ea-palette-submit" type="button">Submit Exam</button><button class="ea-palette-close" type="button" aria-label="Close question palette">×</button></div></header>
       <div class="ea-palette-legend"><span><i class="legend-answered"></i> Attempted / Answered</span><span><i class="legend-review"></i> Marked for Review</span><span><i class="legend-unattempted"></i> Unattempted</span></div>
       <div class="ea-palette-scroll"><div class="ea-palette-grid"></div><p class="ea-palette-message" role="status" aria-live="polite"></p></div>
       <footer class="ea-palette-footer"><span class="ea-palette-count">0 approached</span><span>The exam timer continues while this panel is open.</span></footer>
     </section>`;
-    document.body.appendChild(paletteModal);
+    safeAppendToBody(paletteModal);
     paletteModal.querySelector(".ea-palette-close").addEventListener("click", removePalette);
     paletteModal.querySelector(".ea-palette-submit").addEventListener("click", () => { removePalette(); void openSubmitConfirmation(true); });
     paletteModal.addEventListener("click", (event) => { if (event.target === paletteModal) removePalette(); });
@@ -1807,13 +2047,13 @@
     if (!active || !document.body || document.getElementById(HUD_ID)) return;
     const hud = document.createElement("aside");
     hud.id = HUD_ID;
-    hud.innerHTML = `<header class="ef-hud-header"><span class="ef-hud-brand"><i></i> EXAM ARENA</span><button class="ef-hud-minimize" type="button" aria-label="Minimize HUD">−</button></header>
+    hud.innerHTML = `<header class="ef-hud-header"><span class="ef-hud-brand"><img src="${chrome.runtime.getURL("assets/study-slash-icon-32.png")}" alt=""> STUDY SLASH</span><button class="ef-hud-minimize" type="button" aria-label="Minimize HUD">−</button></header>
       <div class="ef-hud-content"><div class="ef-hud-label">ELAPSED TIME</div><strong class="ef-hud-timer">00:00:00</strong>
       <div class="ef-hud-grid"><div><span>QUESTION</span><b class="ef-hud-question">Waiting…</b></div><div><span>DWELL</span><b class="ef-hud-dwell">00:00:00</b></div></div>
       <div class="ef-hud-progress"><div class="ef-hud-progress-head"><span>COMPLETED</span><b class="ef-hud-count">0 / ∞</b></div><div class="ef-hud-track"><i></i></div></div>
       <button class="ef-hud-status" type="button"><span aria-hidden="true">▦</span> Check Status</button>
       <button class="ef-hud-review" type="button">Mark for Review</button></div>`;
-    document.body.appendChild(hud);
+    safeAppendToBody(hud);
     const position = readPosition();
     if (position) {
       hud.style.setProperty("left", `${position.x}px`, "important"); hud.style.setProperty("top", `${position.y}px`, "important");
@@ -1881,7 +2121,7 @@
     const metrics = [["Total Questions", total], ["Attempted", attempted], ["Skipped / Unattempted", unattempted], ["Correct", right], ["Incorrect", wrong], ["Accuracy", accuracy], ["Total Time Taken", duration]];
     const cells = metrics.map(([label, value]) => `<div class="ef-modal-metric"><span>${label}</span><strong>${value}</strong></div>`).join("");
     completionModal.innerHTML = `<section role="dialog" aria-modal="true" aria-labelledby="ef-modal-title"><span class="ef-modal-eyebrow">SESSION COMPLETE</span><h2 id="ef-modal-title">${reason === "manual" ? "Session Summary" : "Exam Completed"}</h2><div class="ef-modal-grid">${cells}</div><div class="ef-modal-actions"><button class="ef-modal-exit" type="button">Exit</button><button class="ef-modal-details" type="button">View Details</button></div></section>`;
-    document.body.appendChild(completionModal);
+    safeAppendToBody(completionModal);
     completionModal.querySelector(".ef-modal-exit").addEventListener("click", () => {
       completionModal?.remove();
       document.getElementById("examfocus-completion-modal")?.remove();
@@ -1938,7 +2178,7 @@
       const transitionAllowed = !currentId || found?.id === transitionReadyId;
       if (found && found.id !== currentId && transitionAllowed) {
         transitionCandidate = null; transitionReadyId = null;
-        if (currentId) void snapshotCurrentQuestion()?.catch((error) => console.warn("Exam Arena could not save the outgoing question", error));
+        if (currentId) void snapshotCurrentQuestion()?.catch((error) => console.warn("Study Slash could not save the outgoing question", error));
         currentId = found.id;
         session.questionOrder ||= Object.keys(session.questions || {});
         if (!session.questionOrder.includes(currentId)) session.questionOrder.push(currentId);
@@ -1952,7 +2192,7 @@
         session.questions ||= {};
         session.questions[currentId] ||= { timeMs: 0, visits: 0, label: currentLabel };
         void recordQuestion(currentId, 0, undefined, { entered: true, label: currentLabel })
-          .catch((error) => console.warn("Exam Arena could not register the current question", error));
+          .catch((error) => console.warn("Study Slash could not register the current question", error));
         if (pendingJump?.id === currentId) {
           const message = paletteModal?.querySelector(".ea-palette-message");
           if (message) message.textContent = `Question ${pendingJump.relativeNumber} loaded.`;
@@ -2007,7 +2247,11 @@
         const target = record.target.nodeType === Node.ELEMENT_NODE ? record.target : record.target.parentElement;
         return !target?.closest?.(`#${HUD_ID}`);
       });
-      if (pageRecords.length) queueScan(pageRecords);
+      if (pageRecords.length) {
+        const numericEvaluated = document.querySelector(".question-options__option_numeric[data-status='true'], .question-options__option_numeric[data-status='false']");
+        if (active && (answerSubmitted || numericEvaluated)) inspectMarksOutcome();
+        queueScan(pageRecords);
+      }
     });
     if (observerRoot) observer.observe(observerRoot, observerOptions);
     queueScan();
@@ -2027,7 +2271,7 @@
         teardownOrphanedScript();
         return;
       }
-      console.warn("Exam Arena sync warning:", err);
+      console.warn("Study Slash sync warning:", err);
     }
   }
   function stop() {
@@ -2050,7 +2294,11 @@
     document.querySelectorAll(`.${MASK}`).forEach((el) => el.classList.remove(MASK));
     document.querySelectorAll(".examfocus-solution-cta, .examfocus-hint-cta, .examfocus-solution-copy, .examfocus-result-copy, .examfocus-numeric-evaluation, .examfocus-selected-option, .examfocus-floating-feedback, .examfocus-community-solution, .examfocus-option-result-icon, .examfocus-you-marked")
       .forEach((el) => el.classList.remove("examfocus-solution-cta", "examfocus-hint-cta", "examfocus-solution-copy", "examfocus-result-copy", "examfocus-numeric-evaluation", "examfocus-selected-option", "examfocus-floating-feedback", "examfocus-community-solution", "examfocus-option-result-icon", "examfocus-you-marked"));
+    clearCustomOptionHighlights();
     document.getElementById(HUD_ID)?.remove();
+    if (window.location.hostname.includes("getmarks.app")) {
+      setTimeout(() => { if (!active && !isOrphaned) initMarksArenaHoverTile(); }, 300);
+    }
   }
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (!isExtensionValid()) { teardownOrphanedScript(); return false; }
@@ -2065,12 +2313,16 @@
         removePalette();
         if (tickTimer) clearInterval(tickTimer); tickTimer = 0;
         showCompletionModal(message.reason, message.report);
+        if (window.location.hostname.includes("getmarks.app")) setTimeout(() => initMarksArenaHoverTile(), 300);
       }
       sendResponse({ ok: belongsToCurrentSession });
     }
   });
   document.addEventListener("click", handleNextClick, true);
   document.addEventListener("click", handleOptionClick, true);
+  document.addEventListener("input", handleMarksAnswerInput, true);
+  document.addEventListener("change", handleMarksAnswerInput, true);
+  document.addEventListener("keyup", handleMarksAnswerInput, true);
   document.addEventListener("click", (event) => {
     if (!reattemptActive || !(event.target instanceof Element)) return;
     if (event.target.closest(`#${REATTEMPT_HUD_ID}, #${REATTEMPT_CONFIRM_ID}`)) return;
@@ -2083,16 +2335,953 @@
     }
   }, true);
 
+  let isTilePinned = false;
+  let tileHoverTimer = null;
+  let tileDragDistance = 0;
+  let justFinishedDrag = false;
+
+  const BADGE_SIZE = 56;
+  const SCREEN_MARGIN = 8;
+
+  let currentAnchorX = 24;
+  let currentAnchorY = 75;
+  let isDraggingActive = false;
+  let pointerMovedDistance = 0;
+  let dragStartX = 0, dragStartY = 0;
+  let initialElemX = 0, initialElemY = 0;
+  let launcherMountPending = false;
+  let launcherObserver = null;
+
+  function initMarksArenaHoverTile() {
+    if (active || launcherMountPending || document.getElementById("ea-marks-hover-tile")) return;
+
+    if (!isExtensionValid()) return;
+    launcherMountPending = true;
+    chrome.storage.local.get(
+      ["exam-arena-cultivation-state", "examHistory", "examSession", "streakDays", "monthlyTargetPercent", "configuredSubjects", "examModeActive", "monthlyGoal"],
+      (data) => {
+        launcherMountPending = false;
+        if (!isExtensionValid() || data?.examModeActive || active || document.getElementById("ea-marks-hover-tile")) return;
+
+        const cultivation = CultivationStore.deriveProgressFromHistories(data?.examHistory, data?.dpp_history);
+
+        const history = Array.isArray(data?.examHistory) ? data.examHistory : [];
+        const computedStreak = calculateDashboardDailyStreak(history, data?.examSession);
+        const computedMonthlyPct = calculateDashboardMonthlyTarget(history, data?.examSession, data?.monthlyGoal || 300);
+
+        // Keep chrome.storage.local synchronized with the real-time streak and progress
+        if (data?.streakDays !== computedStreak || typeof data?.monthlyTargetPercent !== "number") {
+          chrome.storage.local.set({
+            streakDays: computedStreak,
+            monthlyTargetPercent: computedMonthlyPct
+          }).catch(() => {});
+        }
+
+        const storageWithParity = {
+          ...data,
+          streakDays: computedStreak,
+          monthlyTargetPercent: typeof data?.monthlyTargetPercent === "number" ? data.monthlyTargetPercent : computedMonthlyPct
+        };
+
+        renderMarksArenaHoverTile(cultivation, storageWithParity);
+      }
+    );
+  }
+
+  function deriveLevelFromTotalXp(totalXp) {
+    const xp = Math.max(0, Number(totalXp) || 0);
+    if (xp <= 0) return 1;
+    const rawLevel = (-60 + Math.sqrt(3600 + 16 * xp)) / 8;
+    return Math.min(199, Math.max(1, Math.floor(rawLevel)));
+  }
+
+  function localDayKey(date) {
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  }
+
+  function getQuestionEntries(session) {
+    const questions = Object.entries(session?.questions || {}).sort(([, a], [, b]) => Number(a.firstSeenAt || 0) - Number(b.firstSeenAt || 0));
+    const padding = (session?.targetPadding || []).map((item) => [item.questionId, { ...item, isPlaceholder: true }]);
+    return [...questions, ...padding];
+  }
+
+  function statusOf(session, id, question) {
+    if (question?.cultivationResolved) return "Right";
+    const status = question?.outcome || session?.outcomes?.[id] || "Unattempted";
+    if (question?.isPlaceholder || status === "Not Visited") return "Not Visited";
+    return ["Right", "Wrong"].includes(status) ? status : "Unattempted";
+  }
+
+  function sessionStats(session) {
+    const entries = getQuestionEntries(session);
+    const visited = entries.filter(([id, question]) => statusOf(session, id, question) !== "Not Visited");
+    let right = 0; let wrong = 0;
+    for (const [id, question] of visited) {
+      const status = statusOf(session, id, question);
+      if (status === "Right") right += 1;
+      if (status === "Wrong") wrong += 1;
+    }
+    const net = right * 4 - wrong;
+    const marked = right + wrong;
+    return {
+      entries,
+      visited,
+      right,
+      wrong,
+      net,
+      marked,
+      rawAccuracy: marked ? right / marked * 100 : null,
+      scorePercent: visited.length ? net / (visited.length * 4) * 100 : null
+    };
+  }
+
+  function calculateDashboardDailyStreak(history, activeSession = null) {
+    const sessions = Array.isArray(history) ? [...history] : [];
+    if (activeSession) sessions.push({ ...activeSession, inProgress: true });
+
+    const streakDays = new Set();
+    sessions.forEach((session) => {
+      const key = localDayKey(new Date(sessionTimestamp(session) || 0));
+      if (sessionStats(session).visited.length) streakDays.add(key);
+    });
+
+    let streak = 0;
+    const cursor = new Date();
+    if (!streakDays.has(localDayKey(cursor))) cursor.setDate(cursor.getDate() - 1);
+    while (streakDays.has(localDayKey(cursor))) {
+      streak += 1;
+      cursor.setDate(cursor.getDate() - 1);
+    }
+    return streak;
+  }
+
+  function calculateMonthlyCultivatedTotal(examHistory, targetMonthKey) {
+    const [year, month] = targetMonthKey.split("-").map(Number);
+    const cultivatedSet = new Set();
+
+    (Array.isArray(examHistory) ? examHistory : []).forEach((session) => {
+      const sDate = new Date(sessionTimestamp(session));
+      if (sDate.getFullYear() !== year || (sDate.getMonth() + 1) !== month) return;
+
+      Object.entries(session.questions || {}).forEach(([qid, q]) => {
+        if (q.outcome === "Right" || q.outcome === "Wrong") {
+          cultivatedSet.add(`${session.sessionId || session.date || session.startedAt || session.timestamp}_${qid}`);
+        }
+      });
+
+      (session.reattemptLedger || []).forEach((reattempt) => {
+        const orig = session.questions?.[reattempt.questionId];
+        if (orig && (orig.outcome === "Unattempted" || !orig.outcome)) {
+          if (reattempt.outcome === "Right" || reattempt.outcome === "Wrong") {
+            cultivatedSet.add(`${session.sessionId || session.date || session.startedAt || session.timestamp}_${reattempt.questionId}`);
+          }
+        }
+      });
+    });
+
+    return cultivatedSet.size;
+  }
+
+  function calculateDashboardMonthlyTarget(history, activeSession = null, monthlyGoal = 300) {
+    const sessions = Array.isArray(history) ? [...history] : [];
+    if (activeSession) sessions.push({ ...activeSession, inProgress: true });
+    const now = new Date();
+    const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const volume = calculateMonthlyCultivatedTotal(sessions, currentMonthKey);
+    const target = Math.max(1, Number(monthlyGoal) || 300);
+    return Math.min(100, Math.round(volume / target * 100));
+  }
+
+  // --- Official Study Slash Progressive Cultivation Realm System ---
+  const CULTIVATION_REALMS_SPEC = [
+    { name: "Elementary Profound", color: "#14b8a6", start: 1, end: 10 },
+    { name: "Nascent Profound", color: "#06b6d4", start: 11, end: 20 },
+    { name: "True Profound", color: "#38bdf8", start: 21, end: 30 },
+    { name: "Spirit Profound", color: "#6366f1", start: 31, end: 40 },
+    { name: "Earth Profound", color: "#8b5cf6", start: 41, end: 50 },
+    { name: "Sky Profound", color: "#a855f7", start: 51, end: 60 },
+    { name: "Emperor Profound", color: "#d946ef", start: 61, end: 70 },
+    { name: "Tyrant Profound", color: "#ec4899", start: 71, end: 80 },
+    { name: "Sovereign Profound", color: "#f43f5e", start: 81, end: 90 },
+    { name: "Divine Origin", color: "#f59e0b", start: 91, end: 100 },
+    { name: "Divine Soul", color: "#fbbf24", start: 101, end: 110 },
+    { name: "Divine Tribulation", color: "#eab308", start: 111, end: 119 },
+    { name: "Divine Spirit", color: "#facc15", start: 120, end: 129 },
+    { name: "Divine King", color: "#fef08a", start: 130, end: 139 },
+    { name: "Divine Sovereign", color: "#ffffff", start: 140, end: 149 },
+    { name: "Divine Master", color: "#67e8f9", start: 150, end: 159 },
+    { name: "Divine Extinction", color: "#c084fc", start: 160, end: 169 },
+    { name: "True God", color: "#fb7185", start: 170, end: 179 },
+    { name: "Creation God", color: "#34d399", start: 180, end: 189 },
+    { name: "Ancestor God", color: "#ffd700", start: 190, end: 199 }
+  ];
+  const CULTIVATION_REALMS_CONFIG = CULTIVATION_REALMS_SPEC;
+
+  function toRoman(num) {
+    const romanMap = [[10, "X"], [9, "IX"], [5, "V"], [4, "IV"], [1, "I"]];
+    let res = "";
+    let n = Math.max(1, Math.min(10, Number(num) || 1));
+    for (const [v, r] of romanMap) {
+      while (n >= v) { res += r; n -= v; }
+    }
+    return res;
+  }
+
+  function getRealmMetadata(level = 1) {
+    const boundedLevel = Math.max(1, Math.min(199, Math.floor(Number(level) || 1)));
+    const realmIndex = CULTIVATION_REALMS_SPEC.findIndex(r => boundedLevel >= r.start && boundedLevel <= r.end);
+    const safeIndex = realmIndex === -1 ? 0 : realmIndex;
+    const realm = CULTIVATION_REALMS_SPEC[safeIndex];
+    const insideLevel = (boundedLevel - realm.start) + 1;
+    const romanTier = toRoman(insideLevel);
+    return { boundedLevel, realm, realmIndex: safeIndex, insideLevel, romanTier };
+  }
+  function getCultivationDetails(level = 1) {
+    return getRealmMetadata(level);
+  }
+
+  function renderAuthenticCultivationBadge(level = 1, size = 56) {
+    const { boundedLevel, realm, realmIndex, insideLevel, romanTier } = getRealmMetadata(level);
+
+    // Strategy A: Native CultivationVisuals Engine
+    if (typeof window.CultivationVisuals !== "undefined" && typeof window.CultivationVisuals.renderCultivationBadge === "function") {
+      const nativeSvg = window.CultivationVisuals.renderCultivationBadge(realmIndex, insideLevel, size);
+      nativeSvg.classList.add("cultivation-emblem", `emblem-${realmIndex + 1}`);
+      nativeSvg.setAttribute("width", String(size));
+      nativeSvg.setAttribute("height", String(size));
+      nativeSvg.setAttribute("viewBox", "0 0 100 100");
+      if (nativeSvg.outerHTML) {
+        return `
+          <div class="ea-realm-badge-root" style="width:${size}px; height:${size}px;" title="Cultivation Level ${boundedLevel} (${realm.name} Realm · Tier ${romanTier})">
+            <div class="ea-celestial-pulse-aura" style="background: radial-gradient(circle, ${realm.color || "#14b8a6"}66 0%, transparent 70%);"></div>
+            ${nativeSvg.outerHTML}
+          </div>
+        `;
+      }
+      return nativeSvg.outerHTML;
+    }
+
+    // Strategy B: Standalone Hall of Cultivation Multi-Tier Geometry Fallback
+    const color = realm.color;
+    const filterId = `eaGlow_${boundedLevel}`;
+    const metalGradId = `eaMetal_${boundedLevel}`;
+    const coreGradId = `eaCore_${boundedLevel}`;
+
+    // Multi-tier heraldic paths matching cultivation-visuals.js exactly
+    const pathChevronShield = "M50 4 87 19 78 59 50 94 22 59 13 19z";
+    const pathFlankWings = "m16 20-12-9 8 37 14 13zm68 0 12-9-8 37-14 13zM50 16 67 36 50 55 33 36z";
+    const pathStruts = "m31 59 19 24 19-24";
+    const pathCoreDiamond = "M50 32 65 41 65 59 50 68 35 59 35 41z";
+
+    return `
+      <div class="ea-realm-badge-root" style="width:${size}px; height:${size}px;" title="Cultivation Level ${boundedLevel} (${realm.name} Realm · Tier ${romanTier})">
+        <div class="ea-celestial-pulse-aura" style="background: radial-gradient(circle, ${color}66 0%, transparent 70%);"></div>
+        <svg viewBox="0 0 100 100" width="${size}" height="${size}" class="cultivation-emblem emblem-${realmIndex + 1}" role="img">
+          <defs>
+            <filter id="${filterId}" x="-20%" y="-20%" width="140%" height="140%">
+              <feDropShadow dx="0" dy="2" stdDeviation="3.5" flood-color="${color}" flood-opacity="0.6"/>
+            </filter>
+            <linearGradient id="${metalGradId}" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="${color}" />
+              <stop offset="60%" stop-color="#0f2634" />
+              <stop offset="100%" stop-color="#050e14" />
+            </linearGradient>
+            <linearGradient id="${coreGradId}" x1="0%" y1="0%" x2="0%" y2="100%">
+              <stop offset="0%" stop-color="#0b1722" />
+              <stop offset="100%" stop-color="${color}33" />
+            </linearGradient>
+          </defs>
+          <g filter="url(#${filterId})">
+            <!-- Outer Heraldic Shield -->
+            <path d="${pathChevronShield}" fill="url(#${metalGradId})" stroke="${color}" stroke-width="2.5" stroke-linejoin="round"></path>
+            <!-- Wing Crests & Chevrons -->
+            <path d="${pathFlankWings}" fill="#0d9488" stroke="${color}" stroke-width="2" stroke-linejoin="round"></path>
+            <!-- Accent Struts -->
+            <path d="${pathStruts}" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round"></path>
+            <!-- Core Faceted Diamond Gem -->
+            <path d="${pathCoreDiamond}" fill="url(#${coreGradId})" stroke="${color}" stroke-width="2.2" stroke-linejoin="round"></path>
+            <!-- Roman Numeral Tier Seal -->
+            <text x="50" y="55" text-anchor="middle" fill="#f8fafc" font-size="${romanTier.length >= 3 ? 12 : 15}" font-weight="900" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="-0.04em">
+              ${romanTier}
+            </text>
+          </g>
+        </svg>
+      </div>
+    `;
+  }
+
+  function renderOfficialCultivationBadgeSvg(level = 1, size = 56) {
+    return renderAuthenticCultivationBadge(level, size);
+  }
+  function getRealmBadgeSvg(level) {
+    return renderAuthenticCultivationBadge(level, 56);
+  }
+  function getRealmNameForLevel(level) {
+    return getRealmMetadata(level).realm.name;
+  }
+
+  // --- High-Precision Chapter Name Scraping ---
+  function extractMarksChapterName() {
+    // Priority 1: Top Navigation Breadcrumb (Question Solving Page)
+    // Handles: "JEE Main >> Mathematics in Physics" and "JEE Main >> Basic of Mathematics"
+    const allNodes = document.querySelectorAll("header, nav, div, span, p");
+    for (const node of allNodes) {
+      if (node.children.length > 2) continue; // Keep to leaf nodes
+      const text = (node.innerText || node.textContent || "").trim();
+      if (!text || text.length > 90) continue;
+
+      // Detect >>, », ›, or > separators
+      if (/(?:>>|»|›|>)/.test(text)) {
+        const segments = text.split(/(?:>>|»|›|>)/);
+        if (segments.length >= 2) {
+          const candidate = segments[segments.length - 1].trim();
+          // Disqualify generic UI buckets, statistics, or site descriptors
+          if (
+            candidate.length >= 2 &&
+            !/^(questions?|beginner\s*qs|rank\s*booster|advanced|must\s*do|top\s*numerical|test\s*history|overview)$/i.test(candidate) &&
+            !/marks\s*app/i.test(candidate)
+          ) {
+            return candidate;
+          }
+        }
+      }
+    }
+
+    // Priority 2: Chapter Overview & Topic Header (Left Action Pane)
+    // Handles: <svg> (fx icon) followed by bold "Mathematics in Physics"
+    const overviewTitles = document.querySelectorAll("h1, h2, h3, [class*='title' i], [class*='header' i], div");
+    for (const el of overviewTitles) {
+      if (el.children.length > 1) continue;
+      const val = (el.innerText || el.textContent || "").trim();
+      if (!val || val.length > 60 || val.length < 3) continue;
+
+      // Must be preceded or followed by a Marks context string like "JEE Main » 2026: 3 Qs"
+      const parentContainer = el.closest("section, div, aside");
+      if (parentContainer) {
+        const containerText = (parentContainer.innerText || "").trim();
+        if (/(?:jee\s*main|jee\s*adv|neet|cbse)\s*(?:»|>>|›|:)/i.test(containerText)) {
+          if (!/^(overview|all\s*pyqs|bookmarks|my\s*mistakes|test\s*history|beginner\s*qs)$/i.test(val)) {
+            return val;
+          }
+        }
+      }
+    }
+
+    // Priority 3: Specific Sub-Header Pattern under Bucket Headers
+    const subtitleNodes = document.querySelectorAll("p, span, div");
+    for (const el of subtitleNodes) {
+      if (el.children.length > 0) continue;
+      const text = (el.innerText || el.textContent || "").trim();
+      const match = text.match(/(?:jee\s*main|jee\s*adv|neet|cbse)\s*(?:»|>>|›)\s*(.+)/i);
+      if (match && match[1]) {
+        const cleaned = match[1].replace(/\s*\d{4}:.*$/i, "").trim(); // Strip year metrics
+        if (cleaned.length >= 3 && !/^(questions?|beginner)/i.test(cleaned)) {
+          return cleaned;
+        }
+      }
+    }
+
+    // Priority 4: Clean Document Title Fallback
+    const docTitle = document.title
+      .replace(/MARKS\s*App.*$/i, "")
+      .replace(/[-|]\s*IIT\s*JEE.*$/i, "")
+      .replace(/[-|]\s*NEET.*$/i, "")
+      .trim();
+
+    return (docTitle.length > 2) ? docTitle : "Chapter Practice";
+  }
+
+  // Auto-select corresponding subject based on chapter name
+  function detectMarksSubject(chapterName, configuredSubjects = []) {
+    const combined = `${chapterName} ${document.title} ${window.location.pathname}`.toLowerCase();
+
+    const rules = [
+      { subject: "Physics", tokens: ["physics", "fluids", "mechanics", "kinematics", "shm", "optics", "thermodynamics", "rotation", "electrostatics", "magnetism", "gravity", "units", "dimensions", "motion", "work", "power", "energy"] },
+      { subject: "Mathematics", tokens: ["mathematics", "math", "calculus", "algebra", "vectors", "matrices", "integration", "differentiation", "trigonometry", "basic of mathematics", "probability", "coordinate", "geometry"] },
+      { subject: "Chemistry", tokens: ["chemistry", "organic", "inorganic", "haloalkane", "hydrocarbon", "equilibrium", "bonding", "coordination", "redox", "atomic", "solutions", "kinetics", "p-block", "d-block"] },
+      { subject: "Biology", tokens: ["biology", "botany", "zoology", "genetics", "cell", "human physiology", "plant", "ecology", "reproduction", "biotechnology"] }
+    ];
+
+    for (const rule of rules) {
+      if (rule.tokens.some((token) => combined.includes(token))) {
+        const match = configuredSubjects.find((s) => s.toLowerCase() === rule.subject.toLowerCase());
+        if (match) return match;
+      }
+    }
+
+    return configuredSubjects[0] || "Physics";
+  }
+
+  async function openMarksSessionSetupModal() {
+    document.getElementById("ea-marks-setup-modal")?.remove();
+
+    // Retrieve user configured subjects from storage
+    const storage = await new Promise((resolve) => {
+      chrome.storage.local.get("configuredSubjects", resolve);
+    });
+    const configuredSubjects = Array.isArray(storage?.configuredSubjects) && storage.configuredSubjects.length
+      ? storage.configuredSubjects
+      : ["Physics", "Chemistry", "Mathematics", "Biology"];
+
+    const detectedChapter = extractMarksChapterName();
+    const detectedSubject = detectMarksSubject(detectedChapter, configuredSubjects);
+
+    const modal = document.createElement("div");
+    modal.id = "ea-marks-setup-modal";
+    modal.className = "ea-modal-backdrop";
+    modal.innerHTML = `
+      <div class="ea-setup-dialog" role="dialog" aria-modal="true">
+        <div class="ea-setup-head">
+          <div>
+            <span class="ea-pill-tag">⚡ FOCUS MODE IGNITION</span>
+            <h2>Session Configuration</h2>
+          </div>
+          <button id="closeMarksSetupModalBtn" class="ea-btn-subtle" type="button">✕</button>
+        </div>
+
+        <div class="ea-setup-form">
+          <!-- 1. Auto-detected Chapter Name -->
+          <div class="ea-setup-field">
+            <label for="eaSetupSessionName">Session / Chapter Name</label>
+            <input type="text" id="eaSetupSessionName" value="${detectedChapter}" placeholder="e.g. Rotational Motion" />
+          </div>
+
+          <!-- 2. Subject & Infinite Target Questions -->
+          <div class="ea-setup-grid-2">
+            <div class="ea-setup-field">
+              <label for="eaSetupSubject">Subject</label>
+              <div class="subject-select-wrap">
+                <select id="eaSetupSubject">
+                  ${configuredSubjects.map((s) => `<option value="${s}" ${s === detectedSubject ? "selected" : ""}>${s}</option>`).join("")}
+                  <option value="__ADD_NEW__">＋ Add New Subject...</option>
+                </select>
+              </div>
+
+              <!-- Inline Add New Subject Form (Hidden until chosen) -->
+              <div id="eaNewSubjectInline" class="new-subject-inline" hidden>
+                <input type="text" id="eaNewSubjectInput" placeholder="Subject name..." />
+                <button id="eaSaveSubjectBtn" type="button" class="ea-btn-sm-teal">Save</button>
+                <button id="eaCancelSubjectBtn" type="button" class="ea-btn-sm-ghost">✕</button>
+              </div>
+            </div>
+
+            <div class="ea-setup-field">
+              <label for="eaSetupTargetQ">Target Questions</label>
+              <input type="number" id="eaSetupTargetQ" value="" placeholder="No target (Infinite)" min="1" max="300" />
+              <span class="field-hint">Leave blank for untargeted practice</span>
+            </div>
+          </div>
+
+          <!-- 3. Redesigned Practice Mode Segmented Cards -->
+          <div class="ea-setup-field">
+            <label>Practice Mode</label>
+            <div class="ea-practice-mode-grid">
+              <div class="mode-card active" data-mode="stopwatch">
+                <div class="mode-card-header">
+                  <span class="mode-icon">⏱️</span>
+                  <span class="mode-title">Open Stopwatch</span>
+                  <span class="mode-badge">Untimed</span>
+                </div>
+                <p class="mode-desc">Live dwell tracking per question without time limits. Practice at your own pace.</p>
+              </div>
+
+              <div class="mode-card" data-mode="countdown">
+                <div class="mode-card-header">
+                  <span class="mode-icon">⏳</span>
+                  <span class="mode-title">Countdown Timer</span>
+                  <span class="mode-badge">Strict CBT</span>
+                </div>
+                <p class="mode-desc">Fixed exam countdown. Builds realistic time pressure and speed reflexes.</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- 4. Dynamic Countdown Group -->
+          <div class="ea-setup-field" id="eaSetupCountdownGroup" hidden>
+            <label for="eaSetupMinutes">Allotted Time (Minutes)</label>
+            <input type="number" id="eaSetupMinutes" value="45" min="5" max="360" step="5" />
+          </div>
+
+          <!-- Actions -->
+          <div class="ea-setup-actions">
+            <button id="cancelMarksSetupBtn" class="ea-btn-secondary" type="button">Cancel</button>
+            <button id="igniteMarksSessionBtn" class="ea-btn-ignite" type="button">
+              <span class="btn-icon">⚔️</span> Ignite Focus Session
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    safeAppendToBody(modal);
+
+    // --- Dynamic Subject Addition Handlers ---
+    const subjectSelect = modal.querySelector("#eaSetupSubject");
+    const newSubjectBox = modal.querySelector("#eaNewSubjectInline");
+    const newSubjectInput = modal.querySelector("#eaNewSubjectInput");
+    const saveSubjectBtn = modal.querySelector("#eaSaveSubjectBtn");
+    const cancelSubjectBtn = modal.querySelector("#eaCancelSubjectBtn");
+
+    subjectSelect.addEventListener("change", () => {
+      if (subjectSelect.value === "__ADD_NEW__") {
+        newSubjectBox.hidden = false;
+        newSubjectInput.focus();
+      } else {
+        newSubjectBox.hidden = true;
+      }
+    });
+
+    saveSubjectBtn.addEventListener("click", async () => {
+      const name = newSubjectInput.value.trim();
+      if (!name) return;
+      if (!configuredSubjects.includes(name)) {
+        configuredSubjects.push(name);
+        await chrome.storage.local.set({ configuredSubjects });
+
+        const opt = document.createElement("option");
+        opt.value = name;
+        opt.textContent = name;
+        opt.selected = true;
+        subjectSelect.insertBefore(opt, subjectSelect.querySelector("option[value='__ADD_NEW__']"));
+      }
+      newSubjectBox.hidden = true;
+      newSubjectInput.value = "";
+    });
+
+    cancelSubjectBtn.addEventListener("click", () => {
+      newSubjectBox.hidden = true;
+      subjectSelect.value = configuredSubjects[0] || "Physics";
+    });
+
+    // --- Practice Mode Card Selection ---
+    let selectedMode = "stopwatch";
+    const modeCards = modal.querySelectorAll(".mode-card");
+    const countdownGroup = modal.querySelector("#eaSetupCountdownGroup");
+
+    modeCards.forEach((card) => {
+      card.addEventListener("click", () => {
+        modeCards.forEach((c) => c.classList.remove("active"));
+        card.classList.add("active");
+        selectedMode = card.dataset.mode;
+        countdownGroup.hidden = selectedMode !== "countdown";
+      });
+    });
+
+    // Close handlers
+    modal.querySelector("#closeMarksSetupModalBtn").onclick = () => modal.remove();
+    modal.querySelector("#cancelMarksSetupBtn").onclick = () => modal.remove();
+    modal.addEventListener("click", (e) => {
+      if (e.target === modal) modal.remove();
+    });
+
+    // Ignite Session
+    modal.querySelector("#igniteMarksSessionBtn").onclick = () => {
+      if (!isExtensionValid()) return;
+      const examName = modal.querySelector("#eaSetupSessionName").value.trim() || detectedChapter;
+      const subject = subjectSelect.value === "__ADD_NEW__" ? (configuredSubjects[0] || "Physics") : subjectSelect.value;
+      const targetQRaw = modal.querySelector("#eaSetupTargetQ").value.trim();
+      const targetQuestions = targetQRaw ? (parseInt(targetQRaw, 10) || null) : null;
+      const minutes = parseInt(modal.querySelector("#eaSetupMinutes").value, 10) || 45;
+
+      chrome.runtime.sendMessage({
+        type: "START_SESSION",
+        config: {
+          examName,
+          subject,
+          mode: selectedMode,
+          allottedTimeMs: selectedMode === "countdown" ? minutes * 60000 : null,
+          allottedMinutes: minutes,
+          targetQuestions,
+          source: "marks",
+          testUrl: window.location.href
+        }
+      }, () => {
+        modal.remove();
+        document.getElementById("ea-marks-hover-tile")?.remove();
+      });
+    };
+  }
+
+  function renderMarksArenaHoverTile(cultivation, storageData) {
+    if (document.getElementById("ea-marks-hover-tile")) return;
+
+    // Default to MINIMIZED state
+    const isMinimized = localStorage.getItem("ea-tile-minimized") !== "false";
+    const level = cultivation.level || 1;
+    const { realm, romanTier } = getCultivationDetails(level);
+    const totalXp = Math.max(0, Number(cultivation.total_xp ?? cultivation.xp) || 0);
+    const streak = typeof storageData?.streakDays === "number" ? storageData.streakDays : 0;
+    const monthlyPct = typeof storageData?.monthlyTargetPercent === "number" ? storageData.monthlyTargetPercent : 0;
+
+    const tile = document.createElement("div");
+    tile.id = "ea-marks-hover-tile";
+    tile.className = `ea-marks-tile ${isMinimized ? "minimized" : ""}`;
+    tile.innerHTML = `
+      <!-- Minimized State: Authentic Progressive Cultivation Realm Crest -->
+      <div class="ea-tile-minimized-badge" id="eaTileBadgeHandle">
+        ${renderOfficialCultivationBadgeSvg(level, 56)}
+      </div>
+
+      <!-- Expanded State Header -->
+      <div class="ea-tile-header" id="eaTileHeaderHandle">
+        <div class="ea-tile-brand">
+          <span class="ea-brand-dot"></span>
+          <img class="ea-brand-logo" src="${chrome.runtime.getURL("assets/study-slash-icon-32.png")}" alt="">
+          <span class="ea-brand-title">STUDY SLASH</span>
+        </div>
+        <div class="ea-tile-quick-meta">
+          <span class="ea-meta-chip" id="eaTileStreakChip" title="Daily Practice Streak">🔥 ${streak}d</span>
+          <span class="ea-meta-chip" id="eaTileMonthlyChip" title="Monthly Goal Progress">🎯 ${monthlyPct}%</span>
+        </div>
+        <button id="eaTileMinimizeBtn" class="ea-tile-btn-toggle" title="Minimize to Cultivation Badge">–</button>
+      </div>
+
+      <!-- Expanded State Body -->
+      <div class="ea-tile-body">
+        <div class="ea-tile-cultivation">
+          <div class="ea-cultivation-head">
+            <span class="ea-realm-badge">LVL ${level} · TIER ${romanTier}</span>
+            <span class="ea-cultivation-label">Cultivation Level</span>
+          </div>
+          <div class="ea-realm-title">${realm.name} Realm</div>
+          <div class="ea-tile-xp-meta">
+            <span id="eaTileXpVal">${totalXp.toLocaleString()} XP</span>
+            <span id="eaTileDebtVal">${cultivation.current_debt > 0 
+              ? `<span class="debt-warning">⚠️ Debt: -${cultivation.current_debt}</span>` 
+              : `<span class="clean-flow">🟢 Unhindered</span>`}</span>
+          </div>
+        </div>
+
+        <div class="ea-tile-actions">
+          <button id="eaTileStartSessionBtn" class="ea-tile-act-primary" type="button">
+            ⚡ Start Focus Session
+          </button>
+          <button id="eaTileOpenDashboardBtn" class="ea-tile-act-secondary" type="button">
+            📊 Open Dashboard ↗
+          </button>
+        </div>
+      </div>
+    `;
+
+    whenBodyReady(() => {
+      if (!document.getElementById("ea-marks-hover-tile")) {
+        safeAppendToBody(tile);
+      }
+    });
+
+    // --- Hover Expand & Contract Mechanics ---
+    tile.addEventListener("mouseenter", () => {
+      if (!isTilePinned && tile.classList.contains("minimized")) {
+        clearTimeout(tileHoverTimer);
+        tile.classList.remove("minimized");
+      }
+    });
+
+    tile.addEventListener("mouseleave", () => {
+      if (!isTilePinned && !tile.classList.contains("minimized")) {
+        tileHoverTimer = setTimeout(() => {
+          if (!isTilePinned) {
+            tile.classList.add("minimized");
+            localStorage.setItem("ea-tile-minimized", "true");
+          }
+        }, 280);
+      }
+    });
+
+    // --- Click to Pin / Unpin with Drag Suppression ---
+    const badgeHandle = tile.querySelector("#eaTileBadgeHandle");
+    badgeHandle.addEventListener("click", (e) => {
+      if (justFinishedDrag) return; // Prevent accidental expansion on drag release
+      e.stopPropagation();
+      tile.classList.remove("minimized");
+      isTilePinned = true;
+      localStorage.setItem("ea-tile-minimized", "false");
+    });
+
+    tile.querySelector("#eaTileMinimizeBtn").addEventListener("click", (e) => {
+      e.stopPropagation();
+      isTilePinned = false;
+      tile.classList.add("minimized");
+      localStorage.setItem("ea-tile-minimized", "true");
+    });
+
+    // --- Outside Click to Contract ---
+    document.addEventListener("pointerdown", (e) => {
+      if (!tile.contains(e.target) && !document.getElementById("ea-marks-setup-modal")?.contains(e.target)) {
+        if (!tile.classList.contains("minimized")) {
+          isTilePinned = false;
+          tile.classList.add("minimized");
+          localStorage.setItem("ea-tile-minimized", "true");
+        }
+      }
+    });
+
+    // --- Modal & Dashboard Navigation ---
+    tile.querySelector("#eaTileStartSessionBtn").onclick = () => openMarksSessionSetupModal();
+    tile.querySelector("#eaTileOpenDashboardBtn").onclick = () => {
+      if (!isExtensionValid()) return;
+      chrome.runtime.sendMessage({ type: "OPEN_DASHBOARD" });
+    };
+
+    // Attach 2D Draggable with threshold suppression and 4-quadrant adaptation
+    makeTileDraggableEverywhere(tile, badgeHandle);
+    makeTileDraggableEverywhere(tile, tile.querySelector("#eaTileHeaderHandle"));
+  }
+
+  function clamp(val, min, max) {
+    return Math.max(min, Math.min(max, val));
+  }
+
+  function applyAdaptiveQuadrantPosition(tile, anchorX, anchorY) {
+    if (!tile) return;
+    const midX = window.innerWidth / 2;
+    const midY = window.innerHeight / 2;
+
+    const isRightQuadrant = (anchorX + BADGE_SIZE / 2) > midX;
+    const isBottomQuadrant = (anchorY + BADGE_SIZE / 2) > midY;
+
+    // Clear previous quadrant classes
+    tile.classList.remove("quadrant-tl", "quadrant-tr", "quadrant-bl", "quadrant-br");
+
+    if (isBottomQuadrant && isRightQuadrant) {
+      // Quadrant 4: Bottom-Right -> Open UP and LEFT
+      tile.classList.add("quadrant-br");
+      const rightOffset = window.innerWidth - (anchorX + BADGE_SIZE);
+      const bottomOffset = window.innerHeight - (anchorY + BADGE_SIZE);
+      tile.style.setProperty("right", `${Math.max(SCREEN_MARGIN, rightOffset)}px`, "important");
+      tile.style.setProperty("bottom", `${Math.max(SCREEN_MARGIN, bottomOffset)}px`, "important");
+      tile.style.setProperty("left", "auto", "important");
+      tile.style.setProperty("top", "auto", "important");
+    } else if (isBottomQuadrant && !isRightQuadrant) {
+      // Quadrant 3: Bottom-Left -> Open UP and RIGHT
+      tile.classList.add("quadrant-bl");
+      const bottomOffset = window.innerHeight - (anchorY + BADGE_SIZE);
+      tile.style.setProperty("left", `${Math.max(SCREEN_MARGIN, anchorX)}px`, "important");
+      tile.style.setProperty("bottom", `${Math.max(SCREEN_MARGIN, bottomOffset)}px`, "important");
+      tile.style.setProperty("right", "auto", "important");
+      tile.style.setProperty("top", "auto", "important");
+    } else if (!isBottomQuadrant && isRightQuadrant) {
+      // Quadrant 1: Top-Right -> Open DOWN and LEFT
+      tile.classList.add("quadrant-tr");
+      const rightOffset = window.innerWidth - (anchorX + BADGE_SIZE);
+      tile.style.setProperty("right", `${Math.max(SCREEN_MARGIN, rightOffset)}px`, "important");
+      tile.style.setProperty("top", `${Math.max(SCREEN_MARGIN, anchorY)}px`, "important");
+      tile.style.setProperty("left", "auto", "important");
+      tile.style.setProperty("bottom", "auto", "important");
+    } else {
+      // Quadrant 2: Top-Left -> Open DOWN and RIGHT
+      tile.classList.add("quadrant-tl");
+      tile.style.setProperty("left", `${Math.max(SCREEN_MARGIN, anchorX)}px`, "important");
+      tile.style.setProperty("top", `${Math.max(SCREEN_MARGIN, anchorY)}px`, "important");
+      tile.style.setProperty("right", "auto", "important");
+      tile.style.setProperty("bottom", "auto", "important");
+    }
+  }
+
+  function makeTileDraggableEverywhere(tile, handle) {
+    if (!tile || !handle) return;
+
+    const forceStopDragging = (pointerId) => {
+      const moved = pointerMovedDistance > 6;
+      isDraggingActive = false;
+      try { tile.classList.remove("ea-is-dragging"); } catch (_) {}
+
+      if (pointerId !== undefined) {
+        try {
+          if (handle.hasPointerCapture?.(pointerId)) handle.releasePointerCapture(pointerId);
+        } catch (_) {}
+      }
+
+      if (moved) {
+        justFinishedDrag = true;
+        setTimeout(() => { justFinishedDrag = false; }, 180);
+      }
+
+      try {
+        localStorage.setItem("ea-tile-anchor-x", String(Math.round(currentAnchorX)));
+        localStorage.setItem("ea-tile-anchor-y", String(Math.round(currentAnchorY)));
+        applyAdaptiveQuadrantPosition(tile, currentAnchorX, currentAnchorY);
+      } catch (err) {
+        console.warn("[Study Slash] Could not persist the launcher position:", err);
+      }
+    };
+
+    // Restore saved coordinates
+    if (!tile.dataset.anchorInitialized) {
+      tile.dataset.anchorInitialized = "true";
+      const savedX = parseInt(localStorage.getItem("ea-tile-anchor-x"), 10);
+      const savedY = parseInt(localStorage.getItem("ea-tile-anchor-y"), 10);
+      if (!isNaN(savedX) && !isNaN(savedY)) {
+        currentAnchorX = clamp(savedX, SCREEN_MARGIN, window.innerWidth - BADGE_SIZE - SCREEN_MARGIN);
+        currentAnchorY = clamp(savedY, SCREEN_MARGIN, window.innerHeight - BADGE_SIZE - SCREEN_MARGIN);
+      } else {
+        currentAnchorX = window.innerWidth - BADGE_SIZE - 24;
+        currentAnchorY = 75;
+      }
+      applyAdaptiveQuadrantPosition(tile, currentAnchorX, currentAnchorY);
+
+      window.addEventListener("resize", () => {
+        if (!tile || isDraggingActive) return;
+        const maxBoundX = Math.max(SCREEN_MARGIN, window.innerWidth - BADGE_SIZE - SCREEN_MARGIN);
+        const maxBoundY = Math.max(SCREEN_MARGIN, window.innerHeight - BADGE_SIZE - SCREEN_MARGIN);
+        currentAnchorX = clamp(currentAnchorX, SCREEN_MARGIN, maxBoundX);
+        currentAnchorY = clamp(currentAnchorY, SCREEN_MARGIN, maxBoundY);
+        applyAdaptiveQuadrantPosition(tile, currentAnchorX, currentAnchorY);
+      });
+    }
+
+    handle.addEventListener("pointerdown", (e) => {
+      if (!(e.target instanceof Element) || e.target.closest("button, select, input")) return;
+
+      isDraggingActive = true;
+      pointerMovedDistance = 0;
+      tileDragDistance = 0;
+      dragStartX = e.clientX;
+      dragStartY = e.clientY;
+
+      const wasExpanded = !tile.classList.contains("minimized");
+      // MANDATORY: Force minimized badge presentation during active drag
+      tile.classList.add("minimized", "ea-is-dragging");
+      isTilePinned = false;
+
+      if (wasExpanded) {
+        initialElemX = currentAnchorX;
+        initialElemY = currentAnchorY;
+      } else {
+        const rect = tile.getBoundingClientRect();
+        initialElemX = rect.left;
+        initialElemY = rect.top;
+        currentAnchorX = rect.left;
+        currentAnchorY = rect.top;
+      }
+
+      // Apply direct coordinates to the badge while dragging
+      tile.style.setProperty("left", `${currentAnchorX}px`, "important");
+      tile.style.setProperty("top", `${currentAnchorY}px`, "important");
+      tile.style.setProperty("right", "auto", "important");
+      tile.style.setProperty("bottom", "auto", "important");
+
+      try { handle.setPointerCapture(e.pointerId); } catch (_) {}
+      e.preventDefault();
+    });
+
+    window.addEventListener("pointermove", (e) => {
+      if (!isDraggingActive) return;
+
+      const dx = e.clientX - dragStartX;
+      const dy = e.clientY - dragStartY;
+      pointerMovedDistance = Math.hypot(dx, dy);
+      tileDragDistance = pointerMovedDistance;
+
+      // True 4-corner clamping: allow reaching 8px from any edge
+      const maxBoundX = window.innerWidth - BADGE_SIZE - SCREEN_MARGIN;
+      const maxBoundY = window.innerHeight - BADGE_SIZE - SCREEN_MARGIN;
+
+      currentAnchorX = clamp(initialElemX + dx, SCREEN_MARGIN, maxBoundX);
+      currentAnchorY = clamp(initialElemY + dy, SCREEN_MARGIN, maxBoundY);
+
+      // Apply direct coordinates to the badge while dragging
+      tile.style.setProperty("left", `${currentAnchorX}px`, "important");
+      tile.style.setProperty("top", `${currentAnchorY}px`, "important");
+      tile.style.setProperty("right", "auto", "important");
+      tile.style.setProperty("bottom", "auto", "important");
+    });
+
+    const onDragEnd = (e) => {
+      if (!isDraggingActive) return;
+      forceStopDragging(e?.pointerId);
+    };
+
+    window.addEventListener("pointerup", onDragEnd);
+    window.addEventListener("pointercancel", onDragEnd);
+    handle.addEventListener("lostpointercapture", () => {
+      if (isDraggingActive) forceStopDragging();
+    });
+    window.addEventListener("blur", () => {
+      if (isDraggingActive) forceStopDragging();
+    });
+    window.addEventListener("mouseup", () => {
+      if (isDraggingActive) forceStopDragging();
+    });
+    window.addEventListener("touchend", () => {
+      if (isDraggingActive) forceStopDragging();
+    }, { passive: true });
+  }
+
+  const makeTileDraggableWithThreshold = makeTileDraggableEverywhere;
+
+  function updateMarksHoverTileMetrics(data) {
+    const tile = document.getElementById("ea-marks-hover-tile");
+    if (!tile) return;
+
+    if (data.streakDays !== undefined) {
+      const streakEl = document.getElementById("eaTileStreakChip");
+      if (streakEl) streakEl.textContent = `🔥 ${Number(data.streakDays) || 0}d`;
+    }
+    if (data.monthlyTargetPercent !== undefined) {
+      const monthlyEl = document.getElementById("eaTileMonthlyChip");
+      if (monthlyEl) monthlyEl.textContent = `🎯 ${Number(data.monthlyTargetPercent) || 0}%`;
+    }
+    if (data["exam-arena-cultivation-state"]) {
+      const cultivation = data["exam-arena-cultivation-state"];
+      const level = cultivation.level || 1;
+      const { realm, romanTier } = getCultivationDetails(level);
+      const totalXp = Math.max(0, Number(cultivation.total_xp ?? cultivation.xp) || 0);
+
+      const realmBadge = tile.querySelector(".ea-realm-badge");
+      if (realmBadge) realmBadge.textContent = `LVL ${level} · TIER ${romanTier}`;
+
+      const realmTitle = tile.querySelector(".ea-realm-title");
+      if (realmTitle) realmTitle.textContent = `${realm.name} Realm`;
+
+      const xpSpan = document.getElementById("eaTileXpVal") || tile.querySelector(".ea-tile-xp-meta span:first-child");
+      if (xpSpan) xpSpan.textContent = `${totalXp.toLocaleString()} XP`;
+
+      const debtSpan = document.getElementById("eaTileDebtVal") || tile.querySelector(".ea-tile-xp-meta span:last-child");
+      if (debtSpan) {
+        debtSpan.innerHTML = cultivation.current_debt > 0 
+          ? `<span class="debt-warning">⚠️ Debt: -${cultivation.current_debt}</span>` 
+          : `<span class="clean-flow">🟢 Unhindered</span>`;
+      }
+
+      const badgeHandle = document.getElementById("eaTileBadgeHandle");
+      if (badgeHandle) {
+        badgeHandle.innerHTML = renderOfficialCultivationBadgeSvg(level, 56);
+      }
+    }
+  }
+
+  if (typeof window !== "undefined") {
+    window.calculateDashboardDailyStreak = calculateDashboardDailyStreak;
+    window.calculateDashboardMonthlyTarget = calculateDashboardMonthlyTarget;
+  }
+
   if (isExtensionValid()) {
     chrome.storage.local.get(["examModeActive", "examSession"], (data) => {
       if (!isExtensionValid()) return;
-      if (data?.examModeActive) start(data);
-      else void checkAndLaunchConceptSession();
+      if (data?.examModeActive) {
+        document.getElementById("ea-marks-hover-tile")?.remove();
+        start(data);
+      } else {
+        void checkAndLaunchConceptSession();
+        if (window.location.hostname.includes("getmarks.app")) {
+          initMarksArenaHoverTile();
+        }
+      }
     });
-    chrome.storage.onChanged.addListener((changes) => {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area && area !== "local") return;
       if (!isExtensionValid()) { teardownOrphanedScript(); return; }
-      if (changes.examModeActive?.newValue) chrome.storage.local.get(["examSession"], (data) => start(data));
-      if (changes.examModeActive?.newValue === false && !active) void checkAndLaunchConceptSession();
+      if (changes.examModeActive?.newValue) {
+        document.getElementById("ea-marks-hover-tile")?.remove();
+        chrome.storage.local.get(["examSession"], (data) => start(data));
+      }
+      if (changes.examModeActive?.newValue === false && !active) {
+        void checkAndLaunchConceptSession();
+        if (window.location.hostname.includes("getmarks.app")) {
+          initMarksArenaHoverTile();
+        }
+      }
       if (changes.examModeActive?.newValue === false && active) {
         // Accept a storage transition only when its report belongs to this active run.
         const report = changes.lastReport?.newValue;
@@ -2102,6 +3291,7 @@
           removePalette();
           if (tickTimer) clearInterval(tickTimer); tickTimer = 0;
           showCompletionModal(report.endedReason, report);
+          if (window.location.hostname.includes("getmarks.app")) setTimeout(() => initMarksArenaHoverTile(), 300);
         }
       }
       if (changes.examSession?.newValue) {
@@ -2110,7 +3300,33 @@
         updateHud();
         if (paletteChanged) renderPaletteGrid();
       }
+      // Live-update hover tile metrics
+      if (changes.streakDays || changes.monthlyTargetPercent || changes["exam-arena-cultivation-state"]) {
+        updateMarksHoverTileMetrics({
+          streakDays: changes.streakDays?.newValue,
+          monthlyTargetPercent: changes.monthlyTargetPercent?.newValue,
+          "exam-arena-cultivation-state": changes["exam-arena-cultivation-state"]?.newValue
+        });
+      }
+      if (changes.examHistory && !changes.streakDays) {
+        const history = Array.isArray(changes.examHistory.newValue) ? changes.examHistory.newValue : [];
+        chrome.storage.local.get(["examSession", "monthlyGoal"], (s) => {
+          const streak = calculateDashboardDailyStreak(history, s?.examSession);
+          const monthlyPct = calculateDashboardMonthlyTarget(history, s?.examSession, s?.monthlyGoal || 300);
+          updateMarksHoverTileMetrics({
+            streakDays: streak,
+            monthlyTargetPercent: monthlyPct
+          });
+          chrome.storage.local.set({ streakDays: streak, monthlyTargetPercent: monthlyPct }).catch(() => {});
+        });
+      }
     });
+  }
+  if (window.location.hostname.includes("getmarks.app") && typeof MutationObserver !== "undefined" && document.documentElement) {
+    launcherObserver = new MutationObserver(() => {
+      if (!active && !isOrphaned && !document.getElementById("ea-marks-hover-tile")) initMarksArenaHoverTile();
+    });
+    launcherObserver.observe(document.documentElement, { childList: true, subtree: true });
   }
   document.addEventListener("keydown", (event) => { if (event.key === "Escape" && paletteModal) removePalette(); });
   observeHistoryIntentChanges();
@@ -2120,4 +3336,12 @@
   window.addEventListener("pagehide", () => {
     if (active && currentId) void flushCurrentQuestion().catch(() => {});
   });
+  void (async () => {
+    if (!window.location.hostname.includes("getmarks.app")) return;
+    await ensureBodyReady();
+    if (!isExtensionValid()) return;
+    void checkAndInitReattemptMode();
+    maybeOpenSolutionFromHash();
+    if (!active) initMarksArenaHoverTile();
+  })();
 })();

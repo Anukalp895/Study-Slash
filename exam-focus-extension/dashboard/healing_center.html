@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#040914">
+  <title>Healing Center · Study Slash</title>
+  <link rel="icon" type="image/png" href="../assets/study-slash-icon-32.png">
+  <link rel="stylesheet" href="dashboard.css">
+  <link rel="stylesheet" href="healing_center.css">
+</head>
+<body class="healing-page-body">
+  <header class="topbar">
+    <div class="topbar-left"><a class="brand" href="dashboard.html" aria-label="Study Slash home"><img class="brand-symbol" src="../assets/study-slash-icon-32.png" alt="" width="24" height="24"><span>STUDY <b>SLASH</b> <small>HEALING CENTER</small></span></a></div>
+    <div class="topbar-right"><span class="healing-sync-status" id="healingSyncStatus"><i></i> LOCAL ARCHIVE</span><a href="dashboard.html" class="tool-button nav-back-btn">← Back to Dashboard</a><a href="dpp_arena.html" class="tool-button">DPP Arena</a></div>
+  </header>
+  <main class="healing-main-container">
+    <section class="healing-hero">
+      <div class="healing-hero-text"><span class="eyebrow danger-eyebrow">WOUND RESTORATION PAVILION</span><h1>Healing Center</h1><p class="hero-sub">Re-attempt bled questions or review their concepts to clear cultivation debt.</p></div>
+      <div class="healing-stats-grid" aria-live="polite">
+        <article class="h-card active-bleeds-card"><div class="h-card-top"><span class="h-card-label">ACTIVE BLEEDS</span><span class="h-card-icon" aria-hidden="true">🩸</span></div><strong class="h-card-value danger-value" id="activeBleedsCount">0</strong><span class="h-card-sub">Unresolved wounds incurring debt</span></article>
+        <article class="h-card healed-questions-card"><div class="h-card-top"><span class="h-card-label">HEALED QUESTIONS</span><span class="h-card-icon" aria-hidden="true">🌿</span></div><strong class="h-card-value success-value" id="healedQuestionsCount">0</strong><span class="h-card-sub">Successfully cleansed wounds</span></article>
+      </div>
+    </section>
+    <nav class="healing-tabs-bar" id="healingTabsNav" aria-label="Subject filter tabs"></nav>
+    <section class="healing-list-section" aria-label="Unresolved questions"><div class="healing-list" id="healingListContainer" aria-live="polite"></div></section>
+  </main>
+  <script src="cultivation-store.js"></script>
+  <script src="healing_center.js"></script>
+</body>
+</html>

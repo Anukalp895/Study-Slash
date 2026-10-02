@@ -78,4 +78,4 @@ fs.writeFileSync(outputPath, JSON.stringify(backupData, null, 2), "utf-8");
 
 console.log(`Successfully generated: ${outputPath}`);
 console.log(`File size: ${(fs.statSync(outputPath).size / (1024 * 1024)).toFixed(2)} MB`);
-console.log("Import this JSON file into Exam Arena to inspect high-volume cultivation progress.");
+console.log("Import this JSON file into Study Slash to inspect high-volume cultivation progress.");

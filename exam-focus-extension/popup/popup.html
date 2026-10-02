@@ -3,15 +3,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Exam Arena</title>
-  <link rel="icon" type="image/svg+xml" href="../assets/exam-arena-symbol.svg">
+  <title>Study Slash</title>
+  <link rel="icon" type="image/png" href="../assets/study-slash-icon-32.png">
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
   <main class="panel">
     <header class="topbar">
-      <img class="mark" src="../assets/exam-arena-symbol.svg" alt="">
-      <div><p class="eyebrow">STUDY SESSION</p><h1>Exam Arena</h1></div>
+      <img class="mark" src="../assets/study-slash-logo.png" alt="">
+      <div><p class="eyebrow">STUDY SESSION</p><h1>Study Slash</h1></div>
       <span id="statePill" class="pill">OFF</span>
     </header>
 
@@ -22,8 +22,8 @@
     </section>
 
     <section class="cultivation-mini" aria-label="Cultivation progress">
-      <div id="popupCultivationBadge" class="mini-badge"></div>
-      <div class="mini-cultivation-copy"><p class="eyebrow">CULTIVATION BASE <span id="popupCultivationLevelTag">LEVEL 1 / 199</span></p><strong id="popupCultivationTitle">Elementary Profound Realm</strong><span id="popupCultivationWound" class="mini-flow">🟢 Flow: Unhindered</span></div>
+      <div id="cultivationBadgeIcon" class="mini-badge cultivation-icon-wrap"></div>
+      <div class="mini-cultivation-copy"><p class="eyebrow">CULTIVATION BASE <span id="popupCultivationLevelPill">LEVEL 1 / 199</span></p><strong id="popupCultivationRealmTitle">Elementary Profound Realm</strong><span id="popupCultivationFlowStatus" class="flow-status clean mini-flow">🟢 Flow: Unhindered</span></div>
     </section>
 
     <div class="focus-shield-card">
@@ -41,7 +41,7 @@
     </div>
 
     <button id="toggleButton" class="primary">Start Session</button>
-    <button id="dashboardButton" class="secondary dashboard-button" type="button">Open Exam Arena Dashboard <span aria-hidden="true">↗</span></button>
+    <button id="dashboardButton" class="secondary dashboard-button" type="button">Open Study Slash Dashboard <span aria-hidden="true">↗</span></button>
     <button id="dppArenaButton" class="secondary" type="button" style="margin-top:6px; background:#0d9488; color:#fff; border:none; font-weight:700;">Launch DPP Arena (PDF Mode) ↗</button>
 
     <section id="reportSection" class="report" hidden>
@@ -94,7 +94,8 @@
       </section>
     </section>
   </div>
+  <script src="../dashboard/cultivation-store.js"></script>
   <script src="../dashboard/cultivation-visuals.js"></script>
-  <script src="popup.js"></script>
+  <script src="popup.js" defer></script>
 </body>
 </html>

@@ -1,13 +1,13 @@
 {
   "manifest_version": 3,
-  "name": "Exam Arena",
-  "version": "1.0.0",
-  "description": "A focused exam environment with private practice analytics and masked answer feedback.",
+  "name": "Study Slash",
+  "version": "1.1.1",
+  "description": "Study Slash is a focused exam environment with private practice analytics and masked answer feedback.",
   "icons": {
-    "16": "assets/exam-arena-icon-16.png",
-    "32": "assets/exam-arena-icon-32.png",
-    "48": "assets/exam-arena-icon-48.png",
-    "128": "assets/exam-arena-icon-128.png"
+    "16": "assets/study-slash-icon-16.png",
+    "32": "assets/study-slash-icon-32.png",
+    "48": "assets/study-slash-icon-48.png",
+    "128": "assets/study-slash-icon-128.png"
   },
   "permissions": [
     "storage",
@@ -50,10 +50,10 @@
   "background": { "service_worker": "background.js" },
   "options_page": "dashboard/dashboard.html",
   "action": {
-    "default_title": "Exam Arena",
+    "default_title": "Study Slash",
     "default_icon": {
-      "16": "assets/exam-arena-icon-16.png",
-      "32": "assets/exam-arena-icon-32.png"
+      "16": "assets/study-slash-icon-16.png",
+      "32": "assets/study-slash-icon-32.png"
     },
     "default_popup": "popup/popup.html"
   },
@@ -65,8 +65,12 @@
       "run_at": "document_start"
     },
     {
-      "matches": ["*://*.getmarks.app/*"],
-      "js": ["content_scripts/marks_interceptor.js"],
+      "matches": ["*://*.getmarks.app/*", "*://web.getmarks.app/*"],
+      "js": [
+        "dashboard/cultivation-store.js",
+        "dashboard/cultivation-visuals.js",
+        "content_scripts/marks_interceptor.js"
+      ],
       "css": ["styles/blur.css"],
       "run_at": "document_start"
     },

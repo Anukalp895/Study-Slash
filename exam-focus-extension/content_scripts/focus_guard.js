@@ -1,5 +1,5 @@
 /**
- * Exam Arena — Universal Entertainment Web Filter (focus_guard.js)
+ * Study Slash — Universal Entertainment Web Filter (focus_guard.js)
  * Implements smart keyword and DOM heuristics to block unlisted gaming, anime,
  * and entertainment streaming platforms (e.g. Poki, AnimeDekho) during Focus / Exam Mode.
  */

@@ -1,17 +1,17 @@
-# Chrome Web Store Listing — Exam Arena
+# Chrome Web Store Listing — Study Slash
 
 > Last Updated: 2026-09-26
 
 ## Store Listing
 
 **Extension Name**
-Exam Arena
+Study Slash
 
 **Short Description**
 A focused exam environment with private practice analytics, offline PDF DPP Arena auto-grading, and masked answer feedback.
 
 **Detailed Description**
-Exam Arena helps competitive exam aspirants (JEE, NEET, etc.) build exam temperament and consistency. It blocks distracting websites during active practice, masks instant answer feedback on web test portals (like Marks) to simulate real CBT exams, and features DPP Arena: an offline PDF test simulator with auto-grading, question-by-question dwell time analytics, and autopsy reviews.
+Study Slash helps competitive exam aspirants (JEE, NEET, etc.) build exam temperament and consistency. It blocks distracting websites during active practice, masks instant answer feedback on web test portals (like Marks) to simulate real CBT exams, and features DPP Arena: an offline PDF test simulator with auto-grading, question-by-question dwell time analytics, and autopsy reviews.
 
 Key Features:
 - DPP Arena: Drag-and-drop offline PDF test series and DPPs (Allen, PW, Aakash). Auto-extracts answer keys and metadata, provides a split-screen CBT question console, and records per-question dwell time.

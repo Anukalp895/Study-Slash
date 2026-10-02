@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-const KEYS = ["examModeActive", "examStartedAt", "examSession", "lastReport", "examHistory", "examConfig", "exam_arena_subjects", "exam_arena_recent_names", "focusModeActive"];
+const KEYS = ["examModeActive", "examStartedAt", "examSession", "lastReport", "examHistory", "dpp_history", "examConfig", "exam_arena_subjects", "exam_arena_recent_names", "focusModeActive", "exam-arena-cultivation-state"];
 let state = {};
 let ticker;
 let setupStep = 1;
@@ -60,35 +60,131 @@ function paint() {
   if (active) $("setupModal").hidden = true;
   if (!active && state.lastReport) renderReport(state.lastReport);
 }
+// --- Official Study Slash Progressive Cultivation Realm System ---
+const CULTIVATION_REALMS_CONFIG = [
+  { name: "Elementary Profound", color: "#14b8a6", aura: "rgba(20, 184, 166, 0.55)", start: 1, end: 10 },
+  { name: "Nascent Profound", color: "#06b6d4", aura: "rgba(6, 182, 212, 0.55)", start: 11, end: 20 },
+  { name: "True Profound", color: "#38bdf8", aura: "rgba(56, 189, 248, 0.55)", start: 21, end: 30 },
+  { name: "Spirit Profound", color: "#6366f1", aura: "rgba(99, 102, 241, 0.55)", start: 31, end: 40 },
+  { name: "Earth Profound", color: "#8b5cf6", aura: "rgba(139, 92, 246, 0.6)", start: 41, end: 50 },
+  { name: "Sky Profound", color: "#a855f7", aura: "rgba(168, 85, 247, 0.6)", start: 51, end: 60 },
+  { name: "Emperor Profound", color: "#d946ef", aura: "rgba(217, 70, 239, 0.6)", start: 61, end: 70 },
+  { name: "Tyrant Profound", color: "#ec4899", aura: "rgba(236, 72, 153, 0.65)", start: 71, end: 80 },
+  { name: "Sovereign Profound", color: "#f43f5e", aura: "rgba(244, 63, 94, 0.65)", start: 81, end: 90 },
+  { name: "Divine Origin", color: "#f59e0b", aura: "rgba(245, 158, 11, 0.7)", start: 91, end: 100 },
+  { name: "Divine Soul", color: "#fbbf24", aura: "rgba(251, 191, 36, 0.7)", start: 101, end: 110 },
+  { name: "Divine Tribulation", color: "#eab308", aura: "rgba(234, 179, 8, 0.7)", start: 111, end: 119 },
+  { name: "Divine Spirit", color: "#facc15", aura: "rgba(250, 204, 21, 0.75)", start: 120, end: 129 },
+  { name: "Divine King", color: "#fef08a", aura: "rgba(254, 240, 138, 0.75)", start: 130, end: 139 },
+  { name: "Divine Sovereign", color: "#ffffff", aura: "rgba(255, 255, 255, 0.8)", start: 140, end: 149 },
+  { name: "Divine Master", color: "#67e8f9", aura: "rgba(103, 232, 249, 0.8)", start: 150, end: 159 },
+  { name: "Divine Extinction", color: "#c084fc", aura: "rgba(192, 132, 252, 0.85)", start: 160, end: 169 },
+  { name: "True God", color: "#fb7185", aura: "rgba(251, 113, 133, 0.85)", start: 170, end: 179 },
+  { name: "Creation God", color: "#34d399", aura: "rgba(52, 211, 153, 0.9)", start: 180, end: 189 },
+  { name: "Ancestor God", color: "#ffd700", aura: "rgba(255, 215, 0, 0.95)", start: 190, end: 199 }
+];
+
+function toRoman(num) {
+  const romanMap = [[10, "X"], [9, "IX"], [5, "V"], [4, "IV"], [1, "I"]];
+  let romanTier = "";
+  let n = Math.max(1, Math.min(10, Number(num) || 1));
+  for (const [v, r] of romanMap) {
+    while (n >= v) { romanTier += r; n -= v; }
+  }
+  return romanTier || "I";
+}
+
+function getPopupRealmDetails(level = 1) {
+  const boundedLevel = Math.max(1, Math.min(199, Math.floor(Number(level) || 1)));
+  const realmIndex = Math.max(0, CULTIVATION_REALMS_CONFIG.findIndex(r => boundedLevel >= r.start && boundedLevel <= r.end));
+  const realm = CULTIVATION_REALMS_CONFIG[realmIndex];
+  const insideLevel = (boundedLevel - realm.start) + 1;
+  const romanTier = toRoman(insideLevel);
+  return { boundedLevel, realm, realmIndex, insideLevel, romanTier: romanTier || "I" };
+}
+
+function getCultivationDetails(level = 1) {
+  return getPopupRealmDetails(level);
+}
+
+function renderPopupShieldFallback(realmIndex, insideLevel, romanTier, color, size = 46) {
+  return `
+    <svg viewBox="0 0 100 100" width="${size}" height="${size}" class="cultivation-emblem emblem-${realmIndex + 1}">
+      <defs>
+        <filter id="popGlow_${insideLevel}" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="2" stdDeviation="3.5" flood-color="${color}" flood-opacity="0.6"/>
+        </filter>
+        <linearGradient id="popMetal_${insideLevel}" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="${color}" />
+          <stop offset="60%" stop-color="#0f2634" />
+          <stop offset="100%" stop-color="#050e14" />
+        </linearGradient>
+      </defs>
+      <g filter="url(#popGlow_${insideLevel})">
+        <path d="M50 4 87 19 78 59 50 94 22 59 13 19z" fill="url(#popMetal_${insideLevel})" stroke="${color}" stroke-width="2.5" stroke-linejoin="round"></path>
+        <path d="m16 20-12-9 8 37 14 13zm68 0 12-9-8 37-14 13zM50 16 67 36 50 55 33 36z" fill="#0d9488" stroke="${color}" stroke-width="2" stroke-linejoin="round"></path>
+        <path d="m31 59 19 24 19-24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round"></path>
+        <path d="M50 32 65 41 65 59 50 68 35 59 35 41z" fill="#08101e" stroke="${color}" stroke-width="2.2" stroke-linejoin="round"></path>
+        <text x="50" y="55" text-anchor="middle" fill="#f8fafc" font-size="${romanTier.length >= 3 ? 12 : 15}" font-weight="900" font-family="'JetBrains Mono', monospace">
+          ${romanTier}
+        </text>
+      </g>
+    </svg>
+  `;
+}
+
+function renderOfficialCultivationBadgeSvg(level = 1, size = 46) {
+  const { realmIndex, insideLevel, romanTier, realm } = getPopupRealmDetails(level);
+  if (typeof window.CultivationVisuals !== "undefined" && typeof window.CultivationVisuals.renderCultivationBadge === "function") {
+    const svg = window.CultivationVisuals.renderCultivationBadge(realmIndex, insideLevel, size);
+    svg.classList.add("cultivation-emblem", `emblem-${realmIndex + 1}`);
+    return svg.outerHTML;
+  }
+  return renderPopupShieldFallback(realmIndex, insideLevel, romanTier, realm.color, size);
+}
+
+function updateCultivationDisplay(data) {
+  const cultivation = CultivationStore.deriveProgressFromHistories(state.examHistory, state.dpp_history);
+  const level = cultivation.level;
+  const totalXp = cultivation.total_xp;
+
+  // Derive realm index and sub-level tier
+  const { realmIndex, insideLevel, romanTier, realm } = getPopupRealmDetails(level);
+
+  // 1. Mount Official Badge into #cultivationBadgeIcon / #popupCultivationBadge
+  const badgeContainer = document.getElementById("cultivationBadgeIcon") || document.querySelector(".cultivation-icon-wrap") || document.getElementById("popupCultivationBadge");
+  if (badgeContainer) {
+    if (typeof window.CultivationVisuals !== "undefined" && typeof window.CultivationVisuals.renderCultivationBadge === "function") {
+      const svg = window.CultivationVisuals.renderCultivationBadge(realmIndex, insideLevel, 46);
+      svg.classList.add("cultivation-emblem", `emblem-${realmIndex + 1}`);
+      badgeContainer.replaceChildren(svg);
+    } else {
+      // Self-contained high-fidelity fallback matching Hall of Cultivation
+      badgeContainer.innerHTML = renderPopupShieldFallback(realmIndex, insideLevel, romanTier, realm.color, 46);
+    }
+  }
+
+  // 2. Update Text Labels
+  const levelPill = document.getElementById("popupCultivationLevelPill") || document.getElementById("popupCultivationLevelTag");
+  if (levelPill) levelPill.textContent = `LEVEL ${level} / 199`;
+
+  const realmTitle = document.getElementById("popupCultivationRealmTitle") || document.getElementById("popupCultivationTitle");
+  if (realmTitle) realmTitle.textContent = level === 0 ? "Uninitiated / Mortal" : `${realm.name} Realm · Tier ${romanTier}`;
+
+  const flowStatus = document.getElementById("popupCultivationFlowStatus") || document.getElementById("popupCultivationWound");
+  if (flowStatus) {
+    if (cultivation.current_debt > 0) {
+      flowStatus.textContent = `⚠️ Debt: -${cultivation.current_debt} XP`;
+      flowStatus.className = "flow-status debt mini-flow wounded";
+    } else {
+      flowStatus.textContent = "🟢 Flow: Unhindered";
+      flowStatus.className = "flow-status clean mini-flow";
+    }
+  }
+}
+
 function renderPopupCultivation() {
-  const sessions = [...(Array.isArray(state.examHistory) ? state.examHistory : [])];
-  if (state.examModeActive && state.examSession) sessions.push(state.examSession);
-  const entries = sessions.flatMap((session) => Object.entries(session.questions || {}).map(([id, question]) => ({
-    id, question, at: Number(question.firstSeenAt || sessionTimestamp(session) || 0),
-    status: question.cultivationResolved ? "Right" : question.outcome || session.outcomes?.[id] || "Unattempted"
-  }))).filter((item) => Number(item.question.timeMs) >= 15000).sort((a,b) => a.at-b.at);
-  let xp = 0, debt = 0;
-  entries.forEach((item, index) => {
-    const seconds = Number(item.question.timeMs) || 0;
-    if (item.status === "Wrong") { debt += index >= 1600 ? 25 : index >= 1000 ? 10 : 5; return; }
-    const award = item.question.cultivationResolved ? 10 : item.status === "Right" ? (seconds < 45000 ? 15 : 10) : item.status === "Unattempted" && seconds < 45000 ? 2 : 0;
-    const healed = Math.min(debt, award); debt -= healed; xp += award-healed;
-  });
-  if (!entries.length) xp = 33 * 9000 + 7650;
-  const level = Math.min(199, Math.max(1, Math.floor(xp / 9000) + 1));
-  const realmIndex = CultivationVisuals.realms.findIndex(([,], index) => {
-    const starts = [1,11,21,31,41,51,61,71,81,91,101,111,120,130,140,150,160,170,180,190];
-    const ends = [10,20,30,40,50,60,70,80,90,100,110,119,129,139,149,159,169,179,189,199];
-    return level >= starts[index] && level <= ends[index];
-  });
-  const starts = [1,11,21,31,41,51,61,71,81,91,101,111,120,130,140,150,160,170,180,190];
-  const [realmName] = CultivationVisuals.realms[realmIndex] || CultivationVisuals.realms[0];
-  const subLevel = level - starts[realmIndex] + 1;
-  const host = $("popupCultivationBadge"); host.replaceChildren(CultivationVisuals.renderCultivationBadge(realmIndex, subLevel, 52));
-  $("popupCultivationLevelTag").textContent = `LEVEL ${level} / 199`;
-  $("popupCultivationTitle").textContent = `${realmName} Realm · ${CultivationVisuals.toRoman(subLevel)}`;
-  const wound = $("popupCultivationWound"); wound.textContent = debt ? `🩸 WOUNDED · ${debt} XP debt` : "🟢 Flow: Unhindered";
-  wound.classList.toggle("wounded", debt > 0);
+  updateCultivationDisplay(state);
 }
 function renderReport(report) {
   const questions = report.questions || {};
@@ -256,7 +352,7 @@ $("toggleButton").addEventListener("click", async () => {
   try {
     if (state.examModeActive) { await send("END_EXAM"); await load(); }
     else openSetup();
-  } catch (error) { console.error("Could not update Exam Arena session", error); }
+  } catch (error) { console.error("Could not update Study Slash session", error); }
 });
 $("nameNext").addEventListener("click", () => {
   if (!$("examNameInput").value.trim()) { setSetupError("nameError", "Enter an exam name to continue."); $("examNameInput").focus(); return; }
@@ -310,7 +406,9 @@ chrome.storage.onChanged.addListener((changes) => {
   if (changes.exam_arena_subjects) renderSubjects();
   if (changes.exam_arena_recent_names) renderRecentNames();
   paint();
-  if (changes.examHistory || changes.examSession || changes.examModeActive) renderPopupCultivation();
+  if (changes.examHistory || changes.examSession || changes.examModeActive || changes["exam-arena-cultivation-state"]) {
+    renderPopupCultivation();
+  }
 });
-load().catch((error) => console.error("Could not load Exam Arena session state", error));
+load().catch((error) => console.error("Could not load Study Slash session state", error));
 ticker = setInterval(() => { if (state.examModeActive) paint(); }, 1000);
